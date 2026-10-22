@@ -9,6 +9,7 @@ import { ParticleSystem } from './particles';
 import { AudioManager } from './audio';
 import {
   TD, FEET_OFFSET, ROW, Facing, facingOf, facesAway, weaponHand, walkFrame,
+  attackFacing, swingHand, SWING_COL,
   drawCharacter, drawCharacterFlash, drawShadow, drawWeapon, drawProp,
 } from './art';
 import { ImageAsset } from './sprites';
@@ -25,83 +26,37 @@ export interface EnemyBullet {
 
 type AttackPhase = 'idle' | 'windup' | 'active' | 'recover';
 
-interface HeldStyle {
-  kind: 'fists' | 'swing' | 'gun';
-  asset?: ImageAsset;
-  grip: number; // image pixels behind the hand
-  sleeve: string;
-  skin: string;
+// A character's pose for this frame: the walk sheet normally, the swing
+// rows while a melee attack is under way.
+function poseFor(aim: number, moving: boolean, walkCycle: number, phase: AttackPhase): { facing: Facing; col: number } {
+  if (phase !== 'idle') return { facing: attackFacing(aim), col: SWING_COL[phase] };
+  return { facing: facingOf(aim), col: walkFrame(moving, walkCycle) };
 }
 
-// Draws what a character holds. At rest the weapon sits in the hand the
-// sprite already has (measured per facing in char-rig.ts), so no extra arm
-// is drawn. Only while attacking does the arm reach out: a sleeve from the
-// shoulder on that side to the moving hand, which reads as that same arm.
-// Returns the hand position used.
-function drawHeld(
+// Draws a melee weapon in the sprite's own hand - no arm is ever drawn on top
+// of the sprite. At rest it hangs from the hand measured for the facing; in
+// a swing frame it sits in the swinging fist, along the forearm.
+function drawMeleeWeapon(
   ctx: CanvasRenderingContext2D,
   who: string,
+  asset: ImageAsset | undefined,
+  grip: number,
   sx: number,
   sy: number,
-  facing: Facing,
-  aim: number,
+  pose: { facing: Facing; col: number },
   phase: AttackPhase,
-  style: HeldStyle,
-  recoil = 0
+  aim: number
 ) {
-  const rest = weaponHand(who, facing);
-  const cos = Math.cos(aim);
-  const sin = Math.sin(aim);
-  let hx = sx + rest.x;
-  let hy = sy + rest.y;
-  let angle = aim;
-  const attacking = phase !== 'idle' && style.kind !== 'gun';
-
-  if (style.kind === 'gun') {
-    hx -= cos * recoil * 0.4;
-    hy -= sin * recoil * 0.4;
-  } else if (!attacking) {
-    if (style.kind === 'fists') return { x: hx, y: hy };
-    // Hanging from the hand, tip forward toward the side it faces.
-    angle = Math.PI / 2 + (cos >= 0 ? -0.6 : 0.6);
-  } else {
-    // Out from the chest along the aim: wind-up close, strike at full reach.
-    const reach = style.kind === 'fists'
-      ? { windup: 4, active: 13, recover: 9 }[phase]
-      : { windup: 5, active: 10, recover: 8 }[phase];
-    hx = sx + cos * reach;
-    hy = sy - 6 + sin * reach;
-    if (style.kind === 'swing') {
-      angle = aim + { windup: -1.1, active: 0.9, recover: 0.35 }[phase];
-    }
-    const shX = sx + rest.x * 0.6;
-    const shY = sy - 8;
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.strokeStyle = '#1f1712';
-    ctx.lineWidth = 5;
-    ctx.beginPath();
-    ctx.moveTo(shX, shY);
-    ctx.lineTo(hx, hy);
-    ctx.stroke();
-    ctx.strokeStyle = style.sleeve;
-    ctx.lineWidth = 3;
-    ctx.stroke();
-    ctx.restore();
+  if (!asset) return;
+  if (phase !== 'idle') {
+    const h = swingHand(who, pose.facing, pose.col);
+    drawWeapon(ctx, asset, sx + h.x, sy + h.y, h.angle, grip);
+    return;
   }
-
-  if (style.asset) drawWeapon(ctx, style.asset, hx, hy, angle, style.grip);
-  if (attacking) {
-    ctx.fillStyle = '#1f1712';
-    ctx.beginPath();
-    ctx.arc(hx, hy, 2.6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = style.skin;
-    ctx.beginPath();
-    ctx.arc(hx, hy, 1.7, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  return { x: hx, y: hy };
+  const h = weaponHand(who, pose.facing);
+  // Hanging from the hand, tip forward toward the side it faces.
+  const angle = Math.PI / 2 + (Math.cos(aim) >= 0 ? -0.6 : 0.6);
+  drawWeapon(ctx, asset, sx + h.x, sy + h.y, angle, grip);
 }
 
 export class Player {
@@ -389,8 +344,9 @@ export class Player {
     const sy = this.y - oy;
     const aimAngle = this.facingAngle;
     const isMoving = Math.hypot(this.vx, this.vy) > 15;
-    const facing = facingOf(aimAngle);
-    const col = walkFrame(isMoving, this.walkCycle);
+    const phase: AttackPhase = this.currentWeapon.type === 'melee' ? this.attackPhase : 'idle';
+    const pose = poseFor(aimAngle, isMoving, this.walkCycle, phase);
+    const { facing, col } = pose;
 
     ctx.save();
     drawShadow(ctx, sx, sy + FEET_OFFSET, 10);
@@ -404,9 +360,9 @@ export class Player {
       ctx.globalAlpha = 0.5;
     }
 
-    // Facing away: the weapon is hidden behind the body.
-    const behind = facesAway(facing);
-    if (behind) this.renderWeapon(ctx, sx, sy, facing, isAiming);
+    // Facing away (walking), the weapon is hidden behind the body.
+    const behind = phase === 'idle' && facesAway(facing);
+    if (behind) this.renderWeapon(ctx, sx, sy, pose, phase, isAiming);
     if (!drawCharacter(ctx, TD.player, sx, sy, facing, col)) {
       ctx.fillStyle = '#8c7a5c';
       ctx.fillRect(sx - 6, sy - 18, 12, 30);
@@ -414,21 +370,30 @@ export class Player {
     if (this.hurtTimer > 0) {
       drawCharacterFlash(ctx, TD.player, sx, sy, facing, col, Math.min(1, this.hurtTimer * 5), '#ffd9c4');
     }
-    if (!behind) this.renderWeapon(ctx, sx, sy, facing, isAiming);
+    if (!behind) this.renderWeapon(ctx, sx, sy, pose, phase, isAiming);
 
     ctx.restore();
   }
 
-  private renderWeapon(ctx: CanvasRenderingContext2D, sx: number, sy: number, facing: Facing, isAiming: boolean) {
+  private renderWeapon(
+    ctx: CanvasRenderingContext2D,
+    sx: number,
+    sy: number,
+    pose: { facing: Facing; col: number },
+    phase: AttackPhase,
+    isAiming: boolean
+  ) {
     const weapon = this.currentWeapon;
     const aim = this.facingAngle;
-    const look = { sleeve: '#9b8763', skin: '#d9a07a' };
     if (weapon.type === 'ranged') {
-      // The pistol sprite includes the gripping hand.
-      const hand = drawHeld(ctx, 'player', sx, sy, facing, aim, 'idle',
-        { kind: 'gun', asset: TD.weapons.pistol, grip: 2, ...look }, this.recoilKick);
-      const mx = hand.x + Math.cos(aim) * 7;
-      const my = hand.y + Math.sin(aim) * 7;
+      // In the sprite's hand, pointing at the crosshair; the pistol image
+      // includes the gripping hand. Recoil kicks it back along the aim.
+      const h = weaponHand('player', pose.facing);
+      const hx = sx + h.x - Math.cos(aim) * this.recoilKick * 0.4;
+      const hy = sy + h.y - Math.sin(aim) * this.recoilKick * 0.4;
+      drawWeapon(ctx, TD.weapons.pistol, hx, hy, aim, 2);
+      const mx = hx + Math.cos(aim) * 7;
+      const my = hy + Math.sin(aim) * 7;
       if (isAiming) {
         // Laser sight: a thin dim red line from the muzzle.
         ctx.save();
@@ -459,9 +424,9 @@ export class Player {
       }
       return;
     }
-    const kind = weapon.id === 'fists' ? 'fists' : 'swing';
-    drawHeld(ctx, 'player', sx, sy, facing, aim, this.attackPhase,
-      { kind, asset: TD.weapons[weapon.id], grip: weapon.id === 'stick' ? 4 : 3, ...look });
+    // Bare fists: the swing frames are the punch.
+    if (weapon.id === 'fists') return;
+    drawMeleeWeapon(ctx, 'player', TD.weapons[weapon.id], weapon.id === 'stick' ? 4 : 3, sx, sy, pose, phase, aim);
   }
 }
 
@@ -632,27 +597,27 @@ export class EnemyLooter {
     const sy = this.y - (camY - screenH / 2);
     const angle = this.facingAngle;
     const isMoving = Math.hypot(this.vx, this.vy) > 10;
-    const facing = facingOf(angle);
-    // The wind-up crouch reads as a held frame; the lunge as a stride.
-    let col = walkFrame(isMoving, this.walkCycle);
-    if (this.state === 'windup') col = 0;
-    if (this.state === 'attack') col = 2;
+    const phase: AttackPhase =
+      this.state === 'windup' ? 'windup' : this.state === 'attack' ? 'active' : this.state === 'recover' ? 'recover' : 'idle';
+    const pose = poseFor(angle, isMoving, this.walkCycle, phase);
+    const { facing, col } = pose;
 
     ctx.save();
     drawShadow(ctx, sx, sy + FEET_OFFSET, 10);
 
-    const behind = facesAway(facing);
-    if (behind) this.renderMachete(ctx, sx, sy, facing);
-    // Wind-up tell: the body dips and shakes.
+    const behind = phase === 'idle' && facesAway(facing);
+    const knife = () => drawMeleeWeapon(ctx, 'looter', TD.weapons.knife, 3, sx + shake, sy, pose, phase, angle);
+    // Wind-up tell: the raised-knife frame shakes.
     const shake = this.state === 'windup' ? Math.round(Math.sin(this.attackTimer * 90)) : 0;
-    if (!drawCharacter(ctx, TD.looter, sx + shake, sy, facing, col, this.state === 'windup' ? 1 : 0)) {
+    if (behind) knife();
+    if (!drawCharacter(ctx, TD.looter, sx + shake, sy, facing, col)) {
       ctx.fillStyle = '#6e4a3c';
       ctx.fillRect(sx - 6, sy - 18, 12, 30);
     }
     if (this.hurtFlash > 0) {
       drawCharacterFlash(ctx, TD.looter, sx + shake, sy, facing, col, Math.min(1, this.hurtFlash * 8));
     }
-    if (!behind) this.renderMachete(ctx, sx, sy, facing);
+    if (!behind) knife();
 
     if (this.state === 'alert' || this.state === 'windup') {
       ctx.fillStyle = this.state === 'windup' ? '#ff5a3c' : '#ffcf6a';
@@ -671,13 +636,6 @@ export class EnemyLooter {
       ctx.fillRect(sx - 10, sy - 24, (this.health / this.maxHealth) * 20, 3);
     }
     ctx.restore();
-  }
-
-  private renderMachete(ctx: CanvasRenderingContext2D, sx: number, sy: number, facing: Facing) {
-    const phase: AttackPhase =
-      this.state === 'windup' ? 'windup' : this.state === 'attack' ? 'active' : this.state === 'recover' ? 'recover' : 'idle';
-    drawHeld(ctx, 'looter', sx, sy, facing, this.facingAngle, phase,
-      { kind: 'swing', asset: TD.weapons.knife, grip: 3, sleeve: '#c48a68', skin: '#c48a68' });
   }
 }
 

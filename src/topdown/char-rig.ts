@@ -7,3 +7,19 @@ export const WEAPON_HAND: Record<string, { x: number; y: number }[]> = {
   player: [{ x: -5.0, y: -14.0 }, { x: 5.5, y: -14.0 }, { x: 0.0, y: -13.5 }, { x: -5.8, y: -13.7 }, { x: 4.5, y: -12.5 }],
   looter: [{ x: -5.0, y: -14.5 }, { x: 6.2, y: -14.7 }, { x: 0.2, y: -13.7 }, { x: -5.5, y: -14.8 }, { x: 5.0, y: -13.5 }],
 };
+
+// The swinging fist in the attack rows (front, side, back) for wind-up,
+// strike and follow-through, same coordinates; `a` is the forearm
+// direction (radians, swinging to the right).
+export const SWING_HAND: Record<string, { x: number; y: number; a: number }[][]> = {
+  player: [
+    [{ x: -0.2, y: -23.7, a: -2.7 }, { x: 12.2, y: -23.0, a: -0.11 }, { x: 9.2, y: -16.0, a: 0.86 }],
+    [{ x: -6.2, y: -24.0, a: -2.94 }, { x: 12.5, y: -23.0, a: -0.22 }, { x: 8.2, y: -15.0, a: 0.88 }],
+    [{ x: -5.2, y: -26.0, a: -2.8 }, { x: 14.2, y: -25.0, a: -0.18 }, { x: 9.2, y: -17.0, a: 0.73 }],
+  ],
+  looter: [
+    [{ x: -5.8, y: -29.0, a: -2.4 }, { x: 14.2, y: -24.0, a: -0.21 }, { x: 7.2, y: -16.0, a: 0.99 }],
+    [{ x: -6.5, y: -28.0, a: -2.55 }, { x: 11.2, y: -23.0, a: -0.26 }, { x: 8.2, y: -17.0, a: 0.75 }],
+    [{ x: -8.8, y: -19.3, a: 2.81 }, { x: 12.5, y: -27.0, a: -0.31 }, { x: 13.2, y: -29.0, a: -0.42 }],
+  ],
+};

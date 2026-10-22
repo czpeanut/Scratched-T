@@ -3,7 +3,7 @@
 // still loading, so callers can fall back to a simple shape.
 
 import { ImageAsset } from './sprites';
-import { WEAPON_HAND } from './char-rig';
+import { WEAPON_HAND, SWING_HAND } from './char-rig';
 
 const td = (name: string) => new ImageAsset(`/assets/td/${name}.png`);
 
@@ -71,6 +71,29 @@ export function facingOf(angle: number): Facing {
 export function weaponHand(who: string, facing: Facing): { x: number; y: number } {
   const h = WEAPON_HAND[who][facing.row];
   return { x: facing.flip ? -h.x : h.x, y: h.y + FEET_OFFSET };
+}
+
+// Melee swings use rows 5-7: one right-handed swing seen from the front
+// (3/4), the side and the back, swinging toward screen right; mirrored for
+// swings to the left. Columns: wind-up, strike, follow-through.
+export const ATTACK_ROW = { front: 5, side: 6, back: 7 };
+export const SWING_COL = { windup: 0, active: 1, recover: 2 } as const;
+
+export function attackFacing(aim: number): Facing {
+  const f = facingOf(aim);
+  const row = f.row === ROW.right ? ATTACK_ROW.side
+    : f.row === ROW.up || f.row === ROW.upRight ? ATTACK_ROW.back
+    : ATTACK_ROW.front;
+  return { row, flip: Math.cos(aim) < 0 };
+}
+
+// The swinging fist in an attack frame (relative to body centre) and the
+// direction the held weapon points from it.
+export function swingHand(who: string, facing: Facing, col: number): { x: number; y: number; angle: number } {
+  const h = SWING_HAND[who][facing.row - ATTACK_ROW.front][col];
+  return facing.flip
+    ? { x: -h.x, y: h.y + FEET_OFFSET, angle: Math.PI - h.a }
+    : { x: h.x, y: h.y + FEET_OFFSET, angle: h.a };
 }
 
 // Hands are drawn behind the body when the character faces away.
