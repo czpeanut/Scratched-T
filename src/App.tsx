@@ -16,6 +16,10 @@ export const App: React.FC = () => {
   const [isAiming, setIsAiming] = useState<boolean>(false);
   const [aimProgress, setAimProgress] = useState<number>(0);
   const [isMuted, setIsMuted] = useState<boolean>(false);
+  // On-screen controls only where there is no mouse and keyboard.
+  const [isTouch] = useState<boolean>(
+    () => window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0
+  );
   const [canvasStyle, setCanvasStyle] = useState<{ width: string; height: string }>({
     width: `${VIEW.width * 2}px`,
     height: `${VIEW.height * 2}px`,
@@ -44,6 +48,8 @@ export const App: React.FC = () => {
 
     const engine = new GameEngine(canvas);
     engineRef.current = engine;
+    // Dev-only handle for scripted screenshots (tools/td_screens.mjs).
+    if (import.meta.env.DEV) (window as any).__engine = engine;
 
     engine.onStateChange = (state) => {
       setGameState(state);
@@ -104,7 +110,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="relative w-screen h-screen flex items-center justify-center bg-[#05070e] overflow-hidden select-none">
+    <div className="relative w-screen h-screen flex items-center justify-center bg-[#0d0906] overflow-hidden select-none">
       {/* 2D Canvas */}
       <canvas
         ref={canvasRef}
@@ -117,18 +123,18 @@ export const App: React.FC = () => {
       {gameState !== 'title' && (
         <div className="absolute top-3 left-4 right-4 flex items-center justify-between pointer-events-none z-10 text-xs">
           {/* Left: Health & Stamina */}
-          <div className="flex flex-col gap-1.5 bg-[#0b101c]/80 border border-[#23314f] p-2 rounded shadow-lg backdrop-blur-sm pointer-events-auto">
+          <div className="flex flex-col gap-1.5 bg-[#17110c]/80 border border-[#4a3a2a] p-2 rounded shadow-lg backdrop-blur-sm pointer-events-auto">
             {/* Health Hearts/Blocks */}
             <div className="flex items-center gap-1.5">
-              <span className="text-[#7fd4ff] font-bold text-[10px] tracking-wider">HP</span>
+              <span className="text-[#e8b86a] font-bold text-[10px] tracking-wider">生命</span>
               <div className="flex gap-1">
                 {Array.from({ length: maxHp }).map((_, i) => (
                   <div
                     key={i}
                     className={`w-3.5 h-3.5 rounded-sm border ${
                       i < hp
-                        ? 'bg-[#7fd4ff] border-[#b0e7ff] shadow-[0_0_6px_#7fd4ff]'
-                        : 'bg-[#1b2336] border-[#2c3852]'
+                        ? 'bg-[#d9603f] border-[#f0a080]'
+                        : 'bg-[#2a2018] border-[#3e3024]'
                     }`}
                   />
                 ))}
@@ -137,8 +143,8 @@ export const App: React.FC = () => {
 
             {/* Stamina Bar */}
             <div className="flex items-center gap-1.5">
-              <span className="text-[#ffe169] font-bold text-[10px] tracking-wider">體力</span>
-              <div className="w-24 h-2 bg-[#1b2336] border border-[#3b4760] rounded-sm overflow-hidden">
+              <span className="text-[#e8b86a] font-bold text-[10px] tracking-wider">體力</span>
+              <div className="w-24 h-2 bg-[#2a2018] border border-[#4f3f30] rounded-sm overflow-hidden">
                 <div
                   className="h-full bg-gradient-to-r from-[#e6b830] to-[#ffe680] transition-all duration-75"
                   style={{ width: `${Math.round(stamina * 100)}%` }}
@@ -154,8 +160,8 @@ export const App: React.FC = () => {
                 aimProgress > 0.95
                   ? 'bg-[#ffe082]/20 border-[#ffe082] text-[#ffe082] shadow-[0_0_10px_rgba(255,224,130,0.4)]'
                   : isAiming
-                  ? 'bg-[#7fd4ff]/15 border-[#7fd4ff] text-[#7fd4ff]'
-                  : 'bg-[#0b101c]/60 border-[#23314f] text-[#6c7c9e]'
+                  ? 'bg-[#e8b86a]/15 border-[#e8b86a] text-[#e8b86a]'
+                  : 'bg-[#17110c]/60 border-[#4a3a2a] text-[#9a8668]'
               }`}
             >
               <div
@@ -163,23 +169,23 @@ export const App: React.FC = () => {
                   aimProgress > 0.95
                     ? 'bg-[#ffe082] animate-ping'
                     : isAiming
-                    ? 'bg-[#7fd4ff]'
-                    : 'bg-[#3b4760]'
+                    ? 'bg-[#e8b86a]'
+                    : 'bg-[#4f3f30]'
                 }`}
               />
               <span className="font-bold text-[11px] tracking-wide">
                 {aimProgress > 0.95
-                  ? '★ 準星鎖定 (最高精準 / 長射程)'
+                  ? '準星鎖定'
                   : isAiming
-                  ? `瞄準中 ${(aimProgress * 100).toFixed(0)}% (準星收窄)`
-                  : '腰射狀態 (按住右鍵或U縮小準星)'}
+                  ? `瞄準 ${(aimProgress * 100).toFixed(0)}%`
+                  : '腰射 · 右鍵瞄準'}
               </span>
             </div>
           )}
 
           {/* Right: Equipped Weapon Selector & Mute */}
           <div className="flex items-center gap-2 pointer-events-auto">
-            <div className="flex gap-1 bg-[#0b101c]/80 border border-[#23314f] p-1.5 rounded shadow-lg backdrop-blur-sm">
+            <div className="flex gap-1 bg-[#17110c]/80 border border-[#4a3a2a] p-1.5 rounded shadow-lg backdrop-blur-sm">
               {['fists', 'stick', 'knife', 'pistol'].map((id, idx) => {
                 const w = WEAPONS[id];
                 const isUnlocked = unlockedWeapons.includes(id);
@@ -191,13 +197,13 @@ export const App: React.FC = () => {
                     disabled={!isUnlocked}
                     className={`px-2 py-1 rounded text-[10px] font-bold transition-all ${
                       isEquipped
-                        ? 'bg-[#7fd4ff] text-[#080a14] shadow-[0_0_8px_#7fd4ff]'
+                        ? 'bg-[#e8b86a] text-[#1a120a]'
                         : isUnlocked
-                        ? 'bg-[#18233b] text-[#cfe4ff] hover:bg-[#233355]'
-                        : 'bg-[#10141e] text-[#3e485e] cursor-not-allowed opacity-50'
+                        ? 'bg-[#2c2118] text-[#efdcc0] hover:bg-[#3d2e20]'
+                        : 'bg-[#15100b] text-[#5a4a3a] cursor-not-allowed opacity-50'
                     }`}
                   >
-                    [{idx + 1}] {w.name}
+                    {idx + 1} {w.name.replace(/\s*\(.*\)$/, '')}
                   </button>
                 );
               })}
@@ -205,7 +211,7 @@ export const App: React.FC = () => {
 
             <button
               onClick={toggleMute}
-              className="px-2.5 py-1.5 rounded bg-[#0b101c]/80 border border-[#23314f] text-[#9bb3d9] hover:text-white hover:border-[#7fd4ff] transition-colors"
+              className="px-2.5 py-1.5 rounded bg-[#17110c]/80 border border-[#4a3a2a] text-[#c9b08a] hover:text-white hover:border-[#e8b86a] transition-colors"
               title="切換靜音 (M)"
             >
               {isMuted ? '🔇' : '🔊'}
@@ -215,122 +221,124 @@ export const App: React.FC = () => {
       )}
 
       {/* Bottom Controls Hint Bar (Keyboard users) */}
-      {gameState === 'playing' && (
-        <div className="fixed bottom-2 left-0 right-0 text-center text-[#4a5a80] text-[11px] pointer-events-none select-none tracking-wide hidden md:block">
+      {gameState === 'playing' && !isTouch && (
+        <div className="fixed bottom-2 left-0 right-0 text-center text-[#8a7558] text-[11px] pointer-events-none select-none tracking-wide hidden md:block">
           WASD 移動 &nbsp;·&nbsp; 空白鍵 翻滾 &nbsp;·&nbsp; LMB / J 攻擊 &nbsp;·&nbsp;
           <span className="text-[#ffe082]"> RMB / U 瞄準縮小準星</span> &nbsp;·&nbsp;
           Shift 奔跑 &nbsp;·&nbsp; 1-4 換武器 &nbsp;·&nbsp; E 調查/交談 &nbsp;·&nbsp; ESC 暫停
         </div>
       )}
 
-      {/* Touch Controls Overlay (Mobile / Touch devices) */}
-      <div className="fixed inset-0 pointer-events-none touch-none z-20 md:opacity-90">
-        {/* D-Pad (Bottom Left) */}
-        <div className="fixed left-4 bottom-4 grid grid-cols-3 grid-rows-3 gap-2 w-36 h-36 pointer-events-auto">
-          <div />
-          <button
-            onPointerDown={() => handleTouchDown('up')}
-            onPointerUp={() => handleTouchUp('up')}
-            className="flex items-center justify-center rounded-full bg-[#12182a]/75 border border-[#7fd4ff]/35 active:bg-[#7fd4ff]/40 text-[#cfe4ff] text-base font-bold shadow-md"
-          >
-            ▲
-          </button>
-          <div />
-          <button
-            onPointerDown={() => handleTouchDown('left')}
-            onPointerUp={() => handleTouchUp('left')}
-            className="flex items-center justify-center rounded-full bg-[#12182a]/75 border border-[#7fd4ff]/35 active:bg-[#7fd4ff]/40 text-[#cfe4ff] text-base font-bold shadow-md"
-          >
-            ◀
-          </button>
-          <div />
-          <button
-            onPointerDown={() => handleTouchDown('right')}
-            onPointerUp={() => handleTouchUp('right')}
-            className="flex items-center justify-center rounded-full bg-[#12182a]/75 border border-[#7fd4ff]/35 active:bg-[#7fd4ff]/40 text-[#cfe4ff] text-base font-bold shadow-md"
-          >
-            ▶
-          </button>
-          <div />
-          <button
-            onPointerDown={() => handleTouchDown('down')}
-            onPointerUp={() => handleTouchUp('down')}
-            className="flex items-center justify-center rounded-full bg-[#12182a]/75 border border-[#7fd4ff]/35 active:bg-[#7fd4ff]/40 text-[#cfe4ff] text-base font-bold shadow-md"
-          >
-            ▼
-          </button>
-          <div />
+      {/* Touch Controls Overlay (touch devices only) */}
+      {isTouch && (
+        <div className="fixed inset-0 pointer-events-none touch-none z-20 opacity-90">
+          {/* D-Pad (Bottom Left) */}
+          <div className="fixed left-4 bottom-4 grid grid-cols-3 grid-rows-3 gap-2 w-36 h-36 pointer-events-auto">
+            <div />
+            <button
+              onPointerDown={() => handleTouchDown('up')}
+              onPointerUp={() => handleTouchUp('up')}
+              className="flex items-center justify-center rounded-full bg-[#1e1610]/75 border border-[#e8b86a]/35 active:bg-[#e8b86a]/40 text-[#efdcc0] text-base font-bold shadow-md"
+            >
+              ▲
+            </button>
+            <div />
+            <button
+              onPointerDown={() => handleTouchDown('left')}
+              onPointerUp={() => handleTouchUp('left')}
+              className="flex items-center justify-center rounded-full bg-[#1e1610]/75 border border-[#e8b86a]/35 active:bg-[#e8b86a]/40 text-[#efdcc0] text-base font-bold shadow-md"
+            >
+              ◀
+            </button>
+            <div />
+            <button
+              onPointerDown={() => handleTouchDown('right')}
+              onPointerUp={() => handleTouchUp('right')}
+              className="flex items-center justify-center rounded-full bg-[#1e1610]/75 border border-[#e8b86a]/35 active:bg-[#e8b86a]/40 text-[#efdcc0] text-base font-bold shadow-md"
+            >
+              ▶
+            </button>
+            <div />
+            <button
+              onPointerDown={() => handleTouchDown('down')}
+              onPointerUp={() => handleTouchUp('down')}
+              className="flex items-center justify-center rounded-full bg-[#1e1610]/75 border border-[#e8b86a]/35 active:bg-[#e8b86a]/40 text-[#efdcc0] text-base font-bold shadow-md"
+            >
+              ▼
+            </button>
+            <div />
+          </div>
+
+          {/* Action Buttons (Bottom Right) */}
+          <div className="fixed right-4 bottom-4 grid grid-cols-3 grid-rows-2 gap-2 pointer-events-auto">
+            {/* Aim Down Sights (瞄準 - Crucial Feature) */}
+            <button
+              onPointerDown={() => handleTouchDown('aim')}
+              onPointerUp={() => handleTouchUp('aim')}
+              className={`w-14 h-14 rounded-full border text-xs font-bold shadow-lg transition-all flex flex-col items-center justify-center ${
+                isAiming
+                  ? 'bg-[#ffe082]/40 border-[#ffe082] text-[#ffe082] scale-95 shadow-[0_0_12px_#ffe082]'
+                  : 'bg-[#241a12]/80 border-[#e8b86a]/50 text-[#e8b86a]'
+              }`}
+            >
+              <span>瞄準</span>
+              <span className="text-[9px] opacity-75">縮圈</span>
+            </button>
+
+            <button
+              onPointerDown={() => handleTouchDown('interact')}
+              onPointerUp={() => handleTouchUp('interact')}
+              className="w-14 h-14 rounded-full bg-[#1e1610]/75 border border-[#e8b86a]/35 active:bg-[#e8b86a]/40 text-[#efdcc0] text-xs font-bold shadow-md"
+            >
+              交談
+            </button>
+
+            <button
+              onPointerDown={() => handleTouchDown('sprint')}
+              onPointerUp={() => handleTouchUp('sprint')}
+              className="w-14 h-14 rounded-full bg-[#1e1610]/75 border border-[#e8b86a]/35 active:bg-[#e8b86a]/40 text-[#efdcc0] text-xs font-bold shadow-md"
+            >
+              奔跑
+            </button>
+
+            {/* Fire / Melee Attack */}
+            <button
+              onPointerDown={() => handleTouchDown('fire')}
+              onPointerUp={() => handleTouchUp('fire')}
+              className="w-14 h-14 rounded-full bg-[#3a1a12]/85 border border-[#d9603f]/60 active:bg-[#d9603f]/40 text-[#f6cdb8] text-xs font-bold shadow-lg"
+            >
+              攻擊
+            </button>
+
+            {/* Dash / Roll */}
+            <button
+              onPointerDown={() => handleTouchDown('dash')}
+              onPointerUp={() => handleTouchUp('dash')}
+              className="w-14 h-14 rounded-full bg-[#1e1610]/75 border border-[#e8b86a]/35 active:bg-[#e8b86a]/40 text-[#efdcc0] text-xs font-bold shadow-md"
+            >
+              翻滾
+            </button>
+
+            {/* Weapon Swap */}
+            <button
+              onPointerDown={() => handleTouchDown('swap')}
+              onPointerUp={() => handleTouchUp('swap')}
+              className="w-14 h-14 rounded-full bg-[#2a1f15]/80 border border-[#e8b86a]/40 active:bg-[#e8b86a]/50 text-[#ffe082] text-xs font-bold shadow-md"
+            >
+              換槍
+            </button>
+          </div>
         </div>
-
-        {/* Action Buttons (Bottom Right) */}
-        <div className="fixed right-4 bottom-4 grid grid-cols-3 grid-rows-2 gap-2 pointer-events-auto">
-          {/* Aim Down Sights (瞄準 - Crucial Feature) */}
-          <button
-            onPointerDown={() => handleTouchDown('aim')}
-            onPointerUp={() => handleTouchUp('aim')}
-            className={`w-14 h-14 rounded-full border text-xs font-bold shadow-lg transition-all flex flex-col items-center justify-center ${
-              isAiming
-                ? 'bg-[#ffe082]/40 border-[#ffe082] text-[#ffe082] scale-95 shadow-[0_0_12px_#ffe082]'
-                : 'bg-[#142138]/80 border-[#7fd4ff]/50 text-[#7fd4ff]'
-            }`}
-          >
-            <span>瞄準</span>
-            <span className="text-[9px] opacity-75">縮圈</span>
-          </button>
-
-          <button
-            onPointerDown={() => handleTouchDown('interact')}
-            onPointerUp={() => handleTouchUp('interact')}
-            className="w-14 h-14 rounded-full bg-[#12182a]/75 border border-[#7fd4ff]/35 active:bg-[#7fd4ff]/40 text-[#cfe4ff] text-xs font-bold shadow-md"
-          >
-            交談
-          </button>
-
-          <button
-            onPointerDown={() => handleTouchDown('sprint')}
-            onPointerUp={() => handleTouchUp('sprint')}
-            className="w-14 h-14 rounded-full bg-[#12182a]/75 border border-[#7fd4ff]/35 active:bg-[#7fd4ff]/40 text-[#cfe4ff] text-xs font-bold shadow-md"
-          >
-            奔跑
-          </button>
-
-          {/* Fire / Melee Attack */}
-          <button
-            onPointerDown={() => handleTouchDown('fire')}
-            onPointerUp={() => handleTouchUp('fire')}
-            className="w-14 h-14 rounded-full bg-[#3d1824]/85 border border-[#ff4d6d]/60 active:bg-[#ff4d6d]/40 text-[#ffcad4] text-xs font-bold shadow-lg"
-          >
-            攻擊
-          </button>
-
-          {/* Dash / Roll */}
-          <button
-            onPointerDown={() => handleTouchDown('dash')}
-            onPointerUp={() => handleTouchUp('dash')}
-            className="w-14 h-14 rounded-full bg-[#12182a]/75 border border-[#7fd4ff]/35 active:bg-[#7fd4ff]/40 text-[#cfe4ff] text-xs font-bold shadow-md"
-          >
-            翻滾
-          </button>
-
-          {/* Weapon Swap */}
-          <button
-            onPointerDown={() => handleTouchDown('swap')}
-            onPointerUp={() => handleTouchUp('swap')}
-            className="w-14 h-14 rounded-full bg-[#1d2740]/80 border border-[#7fd4ff]/40 active:bg-[#7fd4ff]/50 text-[#ffe082] text-xs font-bold shadow-md"
-          >
-            換槍
-          </button>
-        </div>
-      </div>
+      )}
 
       {/* Dead Overlay */}
       {gameState === 'dead' && (
-        <div className="absolute inset-0 bg-[#080204]/85 backdrop-blur-sm flex flex-col items-center justify-center z-30">
-          <h2 className="text-3xl font-black text-[#ff3355] tracking-widest mb-2">你在廢墟中倒下了</h2>
-          <p className="text-sm text-[#d48b99] mb-6">廢土沒有憐憫。整裝，重新出發。</p>
+        <div className="absolute inset-0 bg-[#0d0603]/85 backdrop-blur-sm flex flex-col items-center justify-center z-30">
+          <h2 className="text-3xl font-black text-[#d9533b] tracking-widest mb-2">你在廢墟中倒下了</h2>
+          <p className="text-sm text-[#c9927a] mb-6">廢土沒有憐憫。整裝，重新出發。</p>
           <button
             onClick={handleRestart}
-            className="px-6 py-2.5 rounded bg-[#ff3355] text-white font-bold tracking-wider hover:bg-[#ff4d6d] shadow-[0_0_15px_#ff3355] transition-all"
+            className="px-6 py-2.5 rounded bg-[#d9533b] text-white font-bold tracking-wider hover:bg-[#d9603f]  transition-all"
           >
             重新挑戰第一章 (R)
           </button>
@@ -339,9 +347,9 @@ export const App: React.FC = () => {
 
       {/* Pause Menu Modal */}
       {gameState === 'paused' && (
-        <div className="absolute inset-0 bg-[#05070e]/80 backdrop-blur-sm flex flex-col items-center justify-center z-30">
-          <div className="bg-[#0b1120] border border-[#233355] p-6 rounded-lg shadow-2xl max-w-sm w-full text-center">
-            <h2 className="text-xl font-bold text-[#7fd4ff] mb-4">遊戲已暫停</h2>
+        <div className="absolute inset-0 bg-[#0d0906]/80 backdrop-blur-sm flex flex-col items-center justify-center z-30">
+          <div className="bg-[#1a130d] border border-[#3d2e20] p-6 rounded-lg shadow-2xl max-w-sm w-full text-center">
+            <h2 className="text-xl font-bold text-[#e8b86a] mb-4">遊戲已暫停</h2>
             <div className="flex flex-col gap-2 mb-6">
               <button
                 onClick={() => {
@@ -350,18 +358,18 @@ export const App: React.FC = () => {
                     engineRef.current.notifyState();
                   }
                 }}
-                className="w-full py-2 bg-[#1b2b48] hover:bg-[#233962] text-[#e8f1ff] rounded font-bold transition-colors"
+                className="w-full py-2 bg-[#3a2b1d] hover:bg-[#4d3826] text-[#f4e6cf] rounded font-bold transition-colors"
               >
                 繼續遊戲
               </button>
               <button
                 onClick={handleRestart}
-                className="w-full py-2 bg-[#1b2b48] hover:bg-[#233962] text-[#e8f1ff] rounded font-bold transition-colors"
+                className="w-full py-2 bg-[#3a2b1d] hover:bg-[#4d3826] text-[#f4e6cf] rounded font-bold transition-colors"
               >
                 重新開始本章
               </button>
             </div>
-            <p className="text-[11px] text-[#607294]">按 ESC 或 P 鍵隨時暫停 / 恢復</p>
+            <p className="text-[11px] text-[#9a8668]">按 ESC 或 P 鍵隨時暫停 / 恢復</p>
           </div>
         </div>
       )}

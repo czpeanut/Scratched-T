@@ -1,8 +1,20 @@
-// 3/4 Top-Down Grid Tilemap with 3D Wall Facades, Elevation, and AI Textures
+// Tile grid: collision, raycasts, and 3/4 rendering with the AI texture set.
 
 import { TILE } from './constants';
 import { circleAABBCollision } from './math';
-import { ArtAssets } from './sprites';
+import { TD, drawProp, tileHash, mirrorVariants } from './art';
+
+// How far a wall's top face is lifted above its footprint, in pixels.
+export const WALL_H = 24;
+
+// A non-solid (or solid, via PROP_SOLID tiles) sprite placed freely in the
+// world, y-sorted with everything else. (x, y) is its bottom centre.
+export interface Decor {
+  x: number;
+  y: number;
+  prop: string;
+  flip?: boolean;
+}
 
 export const enum TileType {
   VOID = 0,
@@ -18,6 +30,8 @@ export const enum TileType {
   DECOR_CAMPFIRE = 10,
   DECOR_RAILS = 11,
   DECOR_VEHICLE = 12,
+  FLOOR_BRICK = 13,
+  PROP_SOLID = 14, // blocks movement; drawn by a Decor entry
 }
 
 export interface RayHit {
@@ -33,6 +47,7 @@ export class Tilemap {
   public cols: number;
   public rows: number;
   public grid: Uint8Array;
+  public decor: Decor[] = [];
 
   constructor(cols: number, rows: number) {
     this.cols = cols;
@@ -80,7 +95,8 @@ export class Tilemap {
       t === TileType.COVER_CRATE ||
       t === TileType.DECOR_BED ||
       t === TileType.DECOR_DESK ||
-      t === TileType.DECOR_VEHICLE
+      t === TileType.DECOR_VEHICLE ||
+      t === TileType.PROP_SOLID
     );
   }
 
@@ -112,8 +128,9 @@ export class Tilemap {
     return { x: outX, y: outY };
   }
 
-  // Fast DDA raycast for bullet trajectories & line of sight
-  raycast(x1: number, y1: number, x2: number, y2: number): RayHit {
+  // Stepped raycast. Bullets stop at anything solid; with `sightOnly`, only
+  // walls block - low cover, furniture and the fence are seen over/through.
+  raycast(x1: number, y1: number, x2: number, y2: number, sightOnly = false): RayHit {
     const dx = x2 - x1;
     const dy = y2 - y1;
     const totalDist = Math.hypot(dx, dy);
@@ -134,7 +151,7 @@ export class Tilemap {
       const tx = Math.floor(curX / TILE);
       const ty = Math.floor(curY / TILE);
 
-      if (this.isSolid(tx, ty)) {
+      if (sightOnly ? this.isWall(tx, ty) : this.isSolid(tx, ty)) {
         return {
           hit: true,
           x: curX,
@@ -159,504 +176,314 @@ export class Tilemap {
     };
   }
 
-  // --- 3/4 Top-Down Ground & Wall Rendering ---
-  renderFloors(
-    ctx: CanvasRenderingContext2D,
-    camX: number,
-    camY: number,
-    screenW: number,
-    screenH: number
-  ) {
-    const startCol = Math.max(0, Math.floor((camX - screenW / 2) / TILE) - 1);
-    const endCol = Math.min(this.cols - 1, Math.ceil((camX + screenW / 2) / TILE) + 1);
-    const startRow = Math.max(0, Math.floor((camY - screenH / 2) / TILE) - 1);
-    const endRow = Math.min(this.rows - 1, Math.ceil((camY + screenH / 2) / TILE) + 1);
+  // --- Rendering ---
+  //
+  // Floors are drawn first, flat. Everything with height (walls, fences,
+  // props) is handed to the caller as y-sorted renderables so it interleaves
+  // correctly with characters: a wall hides whoever stands behind it.
 
-    const halfW = screenW / 2;
-    const halfH = screenH / 2;
+  private visibleRange(camX: number, camY: number, screenW: number, screenH: number, padTop = 1) {
+    return {
+      c0: Math.max(0, Math.floor((camX - screenW / 2) / TILE) - 1),
+      c1: Math.min(this.cols - 1, Math.ceil((camX + screenW / 2) / TILE) + 1),
+      r0: Math.max(0, Math.floor((camY - screenH / 2) / TILE) - padTop),
+      r1: Math.min(this.rows - 1, Math.ceil((camY + screenH / 2) / TILE) + padTop),
+    };
+  }
 
-    const tileFillImg = ArtAssets.tileFill.loaded ? ArtAssets.tileFill.img : null;
+  isWall(tx: number, ty: number): boolean {
+    const t = this.get(tx, ty);
+    return t === TileType.WALL_CONCRETE;
+  }
 
-    for (let ty = startRow; ty <= endRow; ty++) {
-      for (let tx = startCol; tx <= endCol; tx++) {
-        const type = this.get(tx, ty);
-        const sx = tx * TILE - (camX - halfW);
-        const sy = ty * TILE - (camY - halfH);
+  private floorTexture(t: TileType): string | null {
+    switch (t) {
+      case TileType.FLOOR_WARD: return 'terrazzo';
+      case TileType.FLOOR_ASPHALT: return 'asphalt';
+      case TileType.FLOOR_MOSS: return 'overgrown';
+      case TileType.FLOOR_BRICK: return 'brick';
+      case TileType.DECOR_RAILS: return 'rails';
+      default: return null;
+    }
+  }
 
-        // Ground tiles
-        switch (type) {
-          case TileType.FLOOR_WARD: {
-            // Hospital ward tile - alternating linoleum panels
-            ctx.fillStyle = (tx + ty) % 2 === 0 ? '#182030' : '#141b2a';
-            ctx.fillRect(sx, sy, TILE, TILE);
-            ctx.strokeStyle = 'rgba(74, 90, 134, 0.22)';
-            ctx.lineWidth = 1;
-            ctx.strokeRect(sx + 0.5, sy + 0.5, TILE - 1, TILE - 1);
+  // What floor lies under a solid tile: the most common floor around it.
+  private floorUnder(tx: number, ty: number): TileType {
+    for (const [dx, dy] of [[0, 1], [0, -1], [-1, 0], [1, 0]]) {
+      const t = this.get(tx + dx, ty + dy);
+      if (this.floorTexture(t)) return t;
+    }
+    return TileType.FLOOR_ASPHALT;
+  }
 
-            // Subtle floor cracks on older tiles
-            const crackSeed = (tx * 17 + ty * 31) % 7;
-            if (crackSeed === 0) {
-              ctx.strokeStyle = 'rgba(15, 20, 32, 0.6)';
-              ctx.beginPath();
-              ctx.moveTo(sx + 4, sy + 6);
-              ctx.lineTo(sx + 14, sy + 16);
-              ctx.lineTo(sx + 26, sy + 12);
-              ctx.stroke();
-            } else if (crackSeed === 3) {
-              // Shattered medicine glass fragments / vials
-              ctx.fillStyle = 'rgba(127, 212, 255, 0.4)';
-              ctx.fillRect(sx + 8, sy + 20, 3, 2);
-              ctx.fillRect(sx + 18, sy + 10, 2, 3);
-              ctx.fillStyle = '#ffffff';
-              ctx.fillRect(sx + 9, sy + 20, 1, 1);
-            }
-            break;
+  renderFloors(ctx: CanvasRenderingContext2D, camX: number, camY: number, screenW: number, screenH: number) {
+    const { c0, c1, r0, r1 } = this.visibleRange(camX, camY, screenW, screenH);
+    const ox = camX - screenW / 2;
+    const oy = camY - screenH / 2;
+    const roof = TD.tex.walltop;
+
+    for (let ty = r0; ty <= r1; ty++) {
+      for (let tx = c0; tx <= c1; tx++) {
+        let t = this.get(tx, ty);
+        const sx = Math.round(tx * TILE - ox);
+        const sy = Math.round(ty * TILE - oy);
+
+        if (t === TileType.VOID) {
+          // Outside the playable area: the roofs of the surrounding ruins,
+          // much darker than the lit wall tops.
+          ctx.fillStyle = '#1d1712';
+          ctx.fillRect(sx, sy, TILE, TILE);
+          const rv = mirrorVariants(roof);
+          if (rv) {
+            ctx.globalAlpha = 0.35;
+            ctx.drawImage(rv[Math.floor(tileHash(tx >> 1, ty >> 1) * 4)], (tx * TILE) % 64, (ty * TILE) % 64, TILE, TILE, sx, sy, TILE, TILE);
+            ctx.globalAlpha = 1;
           }
-
-          case TileType.FLOOR_ASPHALT: {
-            // Post-war asphalt road
-            ctx.fillStyle = '#111520';
-            ctx.fillRect(sx, sy, TILE, TILE);
-
-            if (tileFillImg) {
-              ctx.save();
-              ctx.globalAlpha = 0.35;
-              ctx.drawImage(tileFillImg, sx, sy, TILE, TILE);
-              ctx.restore();
-            }
-
-            // Subtle asphalt micro-cracks
-            const aspSeed = (tx * 13 + ty * 23) % 9;
-            if (aspSeed === 1) {
-              ctx.strokeStyle = '#0b0e17';
-              ctx.lineWidth = 1;
-              ctx.beginPath();
-              ctx.moveTo(sx + 2, sy + 8);
-              ctx.lineTo(sx + 12, sy + 18);
-              ctx.lineTo(sx + 20, sy + 15);
-              ctx.stroke();
-            } else if (aspSeed === 4) {
-              // Reflective rainwater puddle reflecting gloomy sky
-              ctx.fillStyle = 'rgba(20, 30, 48, 0.75)';
-              ctx.beginPath();
-              ctx.ellipse(sx + 16, sy + 16, 11, 6, 0.2, 0, Math.PI * 2);
-              ctx.fill();
-              ctx.strokeStyle = 'rgba(70, 95, 140, 0.4)';
-              ctx.lineWidth = 0.8;
-              ctx.stroke();
-              // Water sheen highlight
-              ctx.fillStyle = 'rgba(160, 205, 255, 0.25)';
-              ctx.fillRect(sx + 12, sy + 14, 5, 1.5);
-            }
-
-            // Road center dashes (double line segment)
-            if ((ty === 12 || ty === 13) && tx % 3 === 0) {
-              ctx.fillStyle = 'rgba(230, 200, 100, 0.35)';
-              ctx.fillRect(sx + 2, sy + 14, TILE - 4, 3);
-            }
-            break;
-          }
-
-          case TileType.FLOOR_MOSS: {
-            // Wasteland rubble overgrown with weeds
-            ctx.fillStyle = '#0f1718';
-            ctx.fillRect(sx, sy, TILE, TILE);
-
-            if (tileFillImg) {
-              ctx.save();
-              ctx.globalAlpha = 0.55;
-              ctx.drawImage(tileFillImg, sx, sy, TILE, TILE);
-              ctx.restore();
-            }
-
-            // Weeds & moss tufts
-            const mossSeed = (tx * 7 + ty * 13) % 6;
-            if (mossSeed === 0 || mossSeed === 3) {
-              ctx.fillStyle = '#1c3624';
-              ctx.fillRect(sx + 4, sy + 6, 10, 8);
-              ctx.fillStyle = '#295436';
-              ctx.fillRect(sx + 6, sy + 4, 6, 4);
-            } else if (mossSeed === 1) {
-              // Gravel debris pebble
-              ctx.fillStyle = '#283244';
-              ctx.fillRect(sx + 12, sy + 14, 4, 3);
-              ctx.fillStyle = '#1a2230';
-              ctx.fillRect(sx + 13, sy + 17, 4, 2);
-            }
-            break;
-          }
-
-          case TileType.DECOR_RAILS: {
-            // Abandoned railway heading to South Station
-            ctx.fillStyle = '#0f141f';
-            ctx.fillRect(sx, sy, TILE, TILE);
-
-            // Weathered wooden sleepers with metallic spikes
-            ctx.fillStyle = '#30241b';
-            ctx.fillRect(sx + 2, sy + 5, TILE - 4, 6);
-            ctx.fillStyle = '#3d2e23';
-            ctx.fillRect(sx + 2, sy + 19, TILE - 4, 6);
-
-            // Metal spikes
-            ctx.fillStyle = '#59657a';
-            ctx.fillRect(sx + 5, sy + 7, 2, 2);
-            ctx.fillRect(sx + 23, sy + 7, 2, 2);
-            ctx.fillRect(sx + 5, sy + 21, 2, 2);
-            ctx.fillRect(sx + 23, sy + 21, 2, 2);
-
-            // Steel rails with specular metallic reflection
-            ctx.fillStyle = '#65738e';
-            ctx.fillRect(sx + 6, sy, 3, TILE);
-            ctx.fillRect(sx + 22, sy, 3, TILE);
-            ctx.fillStyle = '#9cb2d6';
-            ctx.fillRect(sx + 7, sy, 1, TILE);
-            ctx.fillRect(sx + 23, sy, 1, TILE);
-            break;
-          }
-
-          default: {
-            // Void or wall floor base
-            ctx.fillStyle = '#060810';
-            ctx.fillRect(sx, sy, TILE, TILE);
-          }
+          continue;
         }
+        if (t === TileType.WALL_CONCRETE) continue; // fully covered by the wall itself
+        if (!this.floorTexture(t)) t = this.floorUnder(tx, ty);
+
+        const name = this.floorTexture(t)!;
+        const variants = mirrorVariants(TD.tex[name]);
+        if (variants) {
+          // Rails only mirror left-right: flipped vertically the ties shift.
+          let v = Math.floor(tileHash(tx >> 2, ty >> 2) * 4);
+          if (name === 'rails') v &= 1;
+          ctx.drawImage(variants[v], (tx * TILE) % 128, (ty * TILE) % 128, TILE, TILE, sx, sy, TILE, TILE);
+        } else {
+          ctx.fillStyle = '#3a332b';
+          ctx.fillRect(sx, sy, TILE, TILE);
+        }
+
+        // Faded lane markings down the middle of the highway.
+        if (t === TileType.FLOOR_ASPHALT && ty === 13 && tx >= 59 && tx <= 85 && tx % 3 !== 0) {
+          ctx.fillStyle = 'rgba(214, 184, 110, 0.28)';
+          ctx.fillRect(sx, sy - 2, TILE, 3);
+        }
+
+        // Ambient occlusion where the floor meets a wall.
+        if (this.isWall(tx, ty - 1)) {
+          const g = ctx.createLinearGradient(0, sy, 0, sy + 12);
+          g.addColorStop(0, 'rgba(20, 12, 6, 0.55)');
+          g.addColorStop(1, 'rgba(20, 12, 6, 0)');
+          ctx.fillStyle = g;
+          ctx.fillRect(sx, sy, TILE, 12);
+        }
+        ctx.fillStyle = 'rgba(20, 12, 6, 0.3)';
+        if (this.isWall(tx - 1, ty)) ctx.fillRect(sx, sy, 4, TILE);
+        if (this.isWall(tx + 1, ty)) ctx.fillRect(sx + TILE - 3, sy, 3, TILE);
       }
     }
   }
 
-  // Render 3/4 perspective wall tops, vertical facades, rebar, and contact shadows
-  renderWalls(
-    ctx: CanvasRenderingContext2D,
-    camX: number,
-    camY: number,
-    screenW: number,
-    screenH: number
-  ) {
-    const startCol = Math.max(0, Math.floor((camX - screenW / 2) / TILE) - 1);
-    const endCol = Math.min(this.cols - 1, Math.ceil((camX + screenW / 2) / TILE) + 1);
-    const startRow = Math.max(0, Math.floor((camY - screenH / 2) / TILE) - 2);
-    const endRow = Math.min(this.rows - 1, Math.ceil((camY + screenH / 2) / TILE) + 1);
-
-    const halfW = screenW / 2;
-    const halfH = screenH / 2;
-
-    const tileCapImg = ArtAssets.tileCap.loaded ? ArtAssets.tileCap.img : null;
-    const tileFillImg = ArtAssets.tileFill.loaded ? ArtAssets.tileFill.img : null;
-
-    for (let ty = startRow; ty <= endRow; ty++) {
-      for (let tx = startCol; tx <= endCol; tx++) {
-        const type = this.get(tx, ty);
-        const sx = tx * TILE - (camX - halfW);
-        const sy = ty * TILE - (camY - halfH);
-
-        if (type === TileType.WALL_CONCRETE) {
-          const hasWallBelow = this.get(tx, ty + 1) === TileType.WALL_CONCRETE;
-
-          // 1. Wall Top Surface (Roof) - 3/4 angle view
-          ctx.fillStyle = '#222d42';
-          ctx.fillRect(sx, sy - 12, TILE, 16);
-
-          if (tileCapImg) {
-            ctx.drawImage(tileCapImg, sx, sy - 15, TILE, 12);
-          } else {
-            ctx.fillStyle = '#3a4b6e';
-            ctx.fillRect(sx, sy - 15, TILE, 3);
-          }
-
-          ctx.strokeStyle = '#4a5d87';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(sx + 0.5, sy - 11.5, TILE - 1, 15);
-
-          // Exposed twisted rebar rods projecting from damaged concrete tops
-          const rebarSeed = (tx * 19 + ty * 29) % 8;
-          if (rebarSeed === 2) {
-            ctx.strokeStyle = '#944730';
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.moveTo(sx + 8, sy - 12);
-            ctx.lineTo(sx + 6, sy - 20);
-            ctx.lineTo(sx + 10, sy - 24);
-            ctx.stroke();
-            // Second smaller rusty rod
-            ctx.strokeStyle = '#b8593a';
-            ctx.beginPath();
-            ctx.moveTo(sx + 14, sy - 12);
-            ctx.lineTo(sx + 17, sy - 18);
-            ctx.stroke();
-          }
-
-          // 2. Wall Front Facade (Vertical 3D face facing the viewer)
-          if (!hasWallBelow) {
-            const faceH = 24;
-            ctx.fillStyle = '#161d2c';
-            ctx.fillRect(sx, sy + 4, TILE, faceH);
-
-            if (tileFillImg) {
-              ctx.save();
-              ctx.globalAlpha = 0.75;
-              ctx.drawImage(tileFillImg, sx, sy + 4, TILE, faceH);
-              ctx.restore();
-            }
-
-            // Concrete brick joints
-            ctx.strokeStyle = '#27344c';
-            ctx.strokeRect(sx + 0.5, sy + 4.5, TILE - 1, faceH);
-
-            // Stencil marking on certain walls (hospital unit or hazard stripe)
-            if (tx === 10 && ty === 8) {
-              ctx.fillStyle = '#7fd4ff';
-              ctx.font = 'bold 7px monospace';
-              ctx.fillText('WARD 01', sx + 2, sy + 14);
-            } else if (tx === 88 && ty === 7) {
-              ctx.fillStyle = '#ffbb33';
-              ctx.font = 'bold 7px monospace';
-              ctx.fillText('OUTPOST', sx + 2, sy + 14);
-            }
-
-            // Contact drop shadow on floor below wall
-            const shadowGrad = ctx.createLinearGradient(sx, sy + 4 + faceH, sx, sy + 4 + faceH + 12);
-            shadowGrad.addColorStop(0, 'rgba(4, 6, 12, 0.85)');
-            shadowGrad.addColorStop(1, 'rgba(4, 6, 12, 0)');
-            ctx.fillStyle = shadowGrad;
-            ctx.fillRect(sx, sy + 4 + faceH, TILE, 12);
-          }
-        } else if (type === TileType.WALL_FENCE) {
-          // Chain link fence with 3D elevation
-          ctx.fillStyle = '#10141e';
-          ctx.fillRect(sx, sy - 16, TILE, 32);
-          ctx.strokeStyle = '#5c6f96';
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(sx, sy - 16);
-          ctx.lineTo(sx + TILE, sy + 16);
-          ctx.moveTo(sx + TILE, sy - 16);
-          ctx.lineTo(sx, sy + 16);
-          ctx.stroke();
-
-          // Barbed wire coiled top
-          ctx.strokeStyle = '#8ca3cc';
-          ctx.beginPath();
-          ctx.arc(sx + 8, sy - 18, 5, 0, Math.PI);
-          ctx.arc(sx + 24, sy - 18, 5, 0, Math.PI);
-          ctx.stroke();
-
-          // Heavy steel fence posts
-          ctx.fillStyle = '#7a8fb5';
-          ctx.fillRect(sx, sy - 20, 3, 38);
-        }
-      }
-    }
-  }
-
-  // Render 3/4 perspective obstacles (beds with IV stands, crates with stencils, sandbags, campfire)
-  renderObstacles(
+  // Pushes every wall, fence and prop in view as { y: sort key, render }.
+  // The sort key is the bottom of the object's footprint, matching the
+  // characters' feet.
+  collectRenderables(
     ctx: CanvasRenderingContext2D,
     camX: number,
     camY: number,
     screenW: number,
     screenH: number,
-    time: number
+    time: number,
+    out: { y: number; render: () => void }[]
   ) {
-    const startCol = Math.max(0, Math.floor((camX - screenW / 2) / TILE) - 1);
-    const endCol = Math.min(this.cols - 1, Math.ceil((camX + screenW / 2) / TILE) + 1);
-    const startRow = Math.max(0, Math.floor((camY - screenH / 2) / TILE) - 1);
-    const endRow = Math.min(this.rows - 1, Math.ceil((camY + screenH / 2) / TILE) + 1);
+    // Wall tops reach WALL_H above their tile, so look one row further down.
+    const { c0, c1, r0, r1 } = this.visibleRange(camX, camY, screenW, screenH, 2);
+    const ox = camX - screenW / 2;
+    const oy = camY - screenH / 2;
 
-    const halfW = screenW / 2;
-    const halfH = screenH / 2;
-
-    for (let ty = startRow; ty <= endRow; ty++) {
-      for (let tx = startCol; tx <= endCol; tx++) {
-        const type = this.get(tx, ty);
-        const sx = tx * TILE - (camX - halfW);
-        const sy = ty * TILE - (camY - halfH);
-
-        switch (type) {
-          case TileType.COVER_SANDBAG: {
-            // 3/4 Sandbags: shadow, front face, top cushions with burlap stitches
-            ctx.fillStyle = 'rgba(4, 6, 12, 0.65)';
-            ctx.beginPath();
-            ctx.ellipse(sx + 16, sy + 23, 15, 6, 0, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Sandbag bottom layer
-            ctx.fillStyle = '#44372a';
-            ctx.beginPath();
-            ctx.roundRect(sx + 2, sy + 7, TILE - 4, 17, 3);
-            ctx.fill();
-
-            // Sandbag top cushion
-            ctx.fillStyle = '#6e5a47';
-            ctx.beginPath();
-            ctx.roundRect(sx + 3, sy + 3, TILE - 6, 12, 3);
-            ctx.fill();
-            ctx.strokeStyle = '#8a725b';
-            ctx.lineWidth = 1;
-            ctx.stroke();
-
-            // Burlap cross seams
-            ctx.strokeStyle = '#4e3f32';
-            ctx.beginPath();
-            ctx.moveTo(sx + 11, sy + 4);
-            ctx.lineTo(sx + 11, sy + 14);
-            ctx.moveTo(sx + 21, sy + 4);
-            ctx.lineTo(sx + 21, sy + 14);
-            ctx.stroke();
+    for (let ty = r0; ty <= r1; ty++) {
+      for (let tx = c0; tx <= c1; tx++) {
+        const t = this.get(tx, ty);
+        const sx = Math.round(tx * TILE - ox);
+        const sy = Math.round(ty * TILE - oy);
+        const key = (ty + 1) * TILE;
+        switch (t) {
+          case TileType.WALL_CONCRETE:
+            out.push({ y: key, render: () => this.drawWall(ctx, tx, ty, sx, sy) });
             break;
-          }
-
+          case TileType.WALL_FENCE:
+            out.push({ y: key, render: () => this.drawFence(ctx, sx, sy) });
+            break;
+          case TileType.COVER_SANDBAG:
+            out.push({ y: key, render: () => this.drawSandbag(ctx, tx, ty, sx, sy) });
+            break;
           case TileType.COVER_CRATE: {
-            // 3/4 Reinforced military shipping crate
-            ctx.fillStyle = 'rgba(4, 6, 12, 0.65)';
-            ctx.fillRect(sx + 3, sy + 22, TILE - 6, 7);
-
-            // Crate front face
-            ctx.fillStyle = '#382a1e';
-            ctx.fillRect(sx + 3, sy + 8, TILE - 6, 16);
-            // Crate top face
-            ctx.fillStyle = '#56412f';
-            ctx.fillRect(sx + 3, sy - 2, TILE - 6, 10);
-            ctx.strokeStyle = '#755940';
-            ctx.strokeRect(sx + 3.5, sy - 1.5, TILE - 7, 25);
-
-            // Corner metal reinforcement brackets & rivets
-            ctx.fillStyle = '#2f3b4e';
-            ctx.fillRect(sx + 3, sy + 8, 4, 4);
-            ctx.fillRect(sx + TILE - 7, sy + 8, 4, 4);
-            ctx.fillRect(sx + 3, sy + 20, 4, 4);
-            ctx.fillRect(sx + TILE - 7, sy + 20, 4, 4);
-
-            // Stencil military chevron
-            ctx.fillStyle = '#8f7759';
-            ctx.font = '6px monospace';
-            ctx.fillText('S-4', sx + 10, sy + 18);
+            const h = tileHash(tx, ty);
+            const inCamp = this.get(tx, ty + 1) === TileType.FLOOR_BRICK || this.get(tx, ty - 1) === TileType.FLOOR_BRICK;
+            const name = inCamp ? 'crate' : h < 0.5 ? 'rubble' : 'garbage';
+            out.push({ y: key, render: () => this.drawShadowedProp(ctx, name, sx + TILE / 2, sy + TILE, h < 0.5) });
             break;
           }
-
-          case TileType.DECOR_BED: {
-            // 3/4 Hospital Ward bed with mattress and attached IV stand
-            ctx.fillStyle = 'rgba(4, 6, 12, 0.55)';
-            ctx.fillRect(sx + 2, sy + 18, TILE - 4, 8);
-
-            // Bed metallic frame
-            ctx.fillStyle = '#1e2638';
-            ctx.fillRect(sx + 3, sy + 6, TILE - 6, 16);
-            // Hospital mattress sheet
-            ctx.fillStyle = '#394869';
-            ctx.fillRect(sx + 4, sy + 2, TILE - 8, 14);
-            // Pillow
-            ctx.fillStyle = '#6b7fa8';
-            ctx.fillRect(sx + 6, sy + 2, 8, 7);
-
-            // IV Saline drip stand next to bed head
-            ctx.strokeStyle = '#8aa3cc';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(sx + 27, sy + 14);
-            ctx.lineTo(sx + 27, sy - 8);
-            ctx.lineTo(sx + 24, sy - 8);
-            ctx.stroke();
-            // Hanging saline bag
-            ctx.fillStyle = 'rgba(160, 220, 255, 0.7)';
-            ctx.fillRect(sx + 23, sy - 7, 3, 5);
+          case TileType.DECOR_BED:
+            out.push({ y: key, render: () => this.drawShadowedProp(ctx, 'bed', sx + TILE / 2, sy + TILE + 6) });
             break;
-          }
-
-          case TileType.DECOR_DESK: {
-            // 3/4 Office desk with stained documents
-            ctx.fillStyle = 'rgba(4, 6, 12, 0.55)';
-            ctx.fillRect(sx + 3, sy + 18, TILE - 6, 7);
-
-            // Desk wood
-            ctx.fillStyle = '#30231b';
-            ctx.fillRect(sx + 4, sy + 8, TILE - 8, 14);
-            ctx.fillStyle = '#4d372a';
-            ctx.fillRect(sx + 4, sy + 2, TILE - 8, 10);
-
-            // Yellowed notice document with red emergency stamp
-            ctx.fillStyle = '#f0e2a8';
-            ctx.fillRect(sx + 10, sy + 4, 10, 8);
-            ctx.fillStyle = '#cc3333';
-            ctx.fillRect(sx + 15, sy + 6, 3, 3);
+          case TileType.DECOR_DESK:
+            out.push({ y: key, render: () => this.drawShadowedProp(ctx, 'desk', sx + TILE / 2, sy + TILE) });
             break;
-          }
-
-          case TileType.DECOR_CAMPFIRE: {
-            // Old Zhou's barrel campfire with charred stones and ember glow
-            ctx.fillStyle = 'rgba(4, 6, 12, 0.7)';
-            ctx.beginPath();
-            ctx.ellipse(sx + 16, sy + 22, 13, 6, 0, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Charred stones encircling the barrel base
-            ctx.fillStyle = '#1c1b18';
-            ctx.fillRect(sx + 3, sy + 19, 4, 4);
-            ctx.fillRect(sx + 25, sy + 19, 4, 4);
-            ctx.fillRect(sx + 14, sy + 23, 4, 3);
-
-            // Corrugated metal barrel
-            ctx.fillStyle = '#262d3d';
-            ctx.fillRect(sx + 6, sy + 8, 20, 16);
-            ctx.fillStyle = '#3c4860';
-            ctx.beginPath();
-            ctx.ellipse(sx + 16, sy + 8, 10, 4, 0, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Inner glowing embers
-            ctx.fillStyle = '#ff4400';
-            ctx.beginPath();
-            ctx.ellipse(sx + 16, sy + 8, 7, 3, 0, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Fire glow & leaping flame
-            const flicker = Math.sin(time * 9) * 2.5 + Math.cos(time * 14) * 1.5;
-            const grad = ctx.createRadialGradient(sx + 16, sy + 5, 2, sx + 16, sy + 5, 22 + flicker);
-            grad.addColorStop(0, '#fff6bd');
-            grad.addColorStop(0.35, '#ff8c1a');
-            grad.addColorStop(0.7, 'rgba(230, 60, 10, 0.4)');
-            grad.addColorStop(1, 'rgba(255, 60, 0, 0)');
-            ctx.fillStyle = grad;
-            ctx.beginPath();
-            ctx.arc(sx + 16, sy + 5, 22 + flicker, 0, Math.PI * 2);
-            ctx.fill();
+          case TileType.DECOR_VEHICLE:
+            // A car spans two tiles; the left one draws it.
+            if (this.get(tx - 1, ty) !== TileType.DECOR_VEHICLE) {
+              const wide = this.get(tx + 1, ty) === TileType.DECOR_VEHICLE;
+              out.push({
+                y: key,
+                render: () => this.drawShadowedProp(ctx, 'car', sx + (wide ? TILE : TILE / 2), sy + TILE + 2, tileHash(tx, ty) < 0.5),
+              });
+            }
             break;
-          }
-
-          case TileType.DECOR_VEHICLE: {
-            // 3/4 Abandoned Patrol Car Wreck
-            ctx.fillStyle = 'rgba(4, 6, 12, 0.65)';
-            ctx.beginPath();
-            ctx.ellipse(sx + 16, sy + 23, 15, 8, 0, 0, Math.PI * 2);
-            ctx.fill();
-
-            // Car chassis
-            ctx.fillStyle = '#1f2430';
-            ctx.fillRect(sx + 2, sy + 6, TILE - 4, 16);
-            ctx.fillStyle = '#343c50';
-            ctx.fillRect(sx + 5, sy - 2, TILE - 10, 10);
-
-            // Shattered windshield with spider cracks
-            ctx.fillStyle = '#10141f';
-            ctx.fillRect(sx + 7, sy, TILE - 14, 6);
-            ctx.strokeStyle = 'rgba(160, 200, 255, 0.5)';
-            ctx.lineWidth = 0.8;
-            ctx.beginPath();
-            ctx.moveTo(sx + 9, sy + 1);
-            ctx.lineTo(sx + 16, sy + 4);
-            ctx.lineTo(sx + 22, sy + 2);
-            ctx.moveTo(sx + 16, sy + 4);
-            ctx.lineTo(sx + 14, sy + 6);
-            ctx.stroke();
-
-            // Broken emergency roof light bar
-            ctx.fillStyle = '#cc2233';
-            ctx.fillRect(sx + 10, sy - 4, 4, 2);
-            ctx.fillStyle = '#2255cc';
-            ctx.fillRect(sx + 17, sy - 4, 4, 2);
+          case TileType.DECOR_CAMPFIRE:
+            out.push({ y: key - 8, render: () => this.drawCampfire(ctx, sx, sy, time) });
             break;
-          }
         }
       }
+    }
+
+    for (const d of this.decor) {
+      const sx = Math.round(d.x - ox);
+      const sy = Math.round(d.y - oy);
+      if (sx < -80 || sx > screenW + 80 || sy < -40 || sy > screenH + 100) continue;
+      out.push({ y: d.y, render: () => this.drawShadowedProp(ctx, d.prop, sx, sy, d.flip) });
+    }
+  }
+
+  private drawWall(ctx: CanvasRenderingContext2D, tx: number, ty: number, sx: number, sy: number) {
+    const top = mirrorVariants(TD.tex.walltop);
+    const topY = sy - WALL_H;
+
+    // Top face: the tile's footprint lifted by the wall height.
+    if (top) {
+      ctx.drawImage(top[Math.floor(tileHash(tx >> 1, ty >> 1) * 4)], (tx * TILE) % 64, (ty * TILE) % 64, TILE, TILE, sx, topY, TILE, TILE);
+    } else {
+      ctx.fillStyle = '#8a8070';
+      ctx.fillRect(sx, topY, TILE, TILE);
+    }
+    // Rim light on exposed top edges, dark lip where the top meets open floor.
+    ctx.fillStyle = 'rgba(255, 236, 200, 0.22)';
+    if (!this.isWall(tx, ty - 1)) ctx.fillRect(sx, topY, TILE, 2);
+    ctx.fillStyle = 'rgba(30, 20, 12, 0.45)';
+    if (!this.isWall(tx - 1, ty)) ctx.fillRect(sx, topY, 2, TILE);
+    if (!this.isWall(tx + 1, ty)) ctx.fillRect(sx + TILE - 2, topY, 2, TILE);
+
+    // Front face, only where the wall ends and floor (or the void) begins.
+    if (!this.isWall(tx, ty + 1)) {
+      const faceY = sy + TILE - WALL_H;
+      const below = this.get(tx, ty + 1);
+      const hosp = below === TileType.FLOOR_WARD && TD.tex.hospwall.loaded;
+      const face = hosp ? TD.tex.hospwall : TD.tex.wallface;
+      if (face.loaded) {
+        const srcY = hosp ? 0 : (ty * 37) % (128 - WALL_H);
+        ctx.drawImage(face.img, (tx * TILE) % 128, srcY, TILE, WALL_H, sx, faceY, TILE, WALL_H);
+      } else {
+        ctx.fillStyle = '#6a6052';
+        ctx.fillRect(sx, faceY, TILE, WALL_H);
+      }
+      // Darken toward the floor and under the top edge for depth.
+      const g = ctx.createLinearGradient(0, faceY, 0, faceY + WALL_H);
+      g.addColorStop(0, 'rgba(25, 16, 10, 0.35)');
+      g.addColorStop(0.25, 'rgba(25, 16, 10, 0)');
+      g.addColorStop(1, 'rgba(25, 16, 10, 0.4)');
+      ctx.fillStyle = g;
+      ctx.fillRect(sx, faceY, TILE, WALL_H);
+      ctx.fillStyle = 'rgba(15, 10, 6, 0.7)';
+      ctx.fillRect(sx, faceY, TILE, 1);
+    }
+  }
+
+  private drawFence(ctx: CanvasRenderingContext2D, sx: number, sy: number) {
+    const base = sy + TILE - 4;
+    const h = 30;
+    ctx.save();
+    ctx.fillStyle = 'rgba(16, 10, 6, 0.4)';
+    ctx.fillRect(sx, base - 2, TILE, 5);
+    // Chain-link mesh
+    ctx.strokeStyle = 'rgba(150, 140, 120, 0.55)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = -h; i < TILE; i += 5) {
+      ctx.moveTo(sx + i, base);
+      ctx.lineTo(sx + i + h, base - h);
+      ctx.moveTo(sx + i + h, base);
+      ctx.lineTo(sx + i, base - h);
+    }
+    ctx.save();
+    ctx.rect(sx, base - h, TILE, h);
+    ctx.clip();
+    ctx.stroke();
+    ctx.restore();
+    // Posts and top rail
+    ctx.fillStyle = '#4a4238';
+    ctx.fillRect(sx, base - h - 2, 3, h + 2);
+    ctx.fillRect(sx + TILE - 3, base - h - 2, 3, h + 2);
+    ctx.fillRect(sx, base - h - 2, TILE, 2);
+    // Razor wire
+    ctx.strokeStyle = '#8c8270';
+    ctx.beginPath();
+    for (let i = 0; i < 4; i++) ctx.arc(sx + 4 + i * 8, base - h - 5, 3.5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  private drawSandbag(ctx: CanvasRenderingContext2D, tx: number, ty: number, sx: number, sy: number) {
+    const img = TD.props.sandbag_long;
+    if (!img.loaded) {
+      ctx.fillStyle = '#7a6a50';
+      ctx.fillRect(sx + 1, sy + 8, TILE - 2, 22);
+      return;
+    }
+    const vertical = this.get(tx, ty - 1) === TileType.COVER_SANDBAG || this.get(tx, ty + 1) === TileType.COVER_SANDBAG;
+    // A 34px slice of the long sandbag wall; alternate halves so a run
+    // doesn't repeat the same bags.
+    const w = 34;
+    const srcX = (tx + ty) % 2 === 0 ? 0 : img.img.width - w;
+    const h = img.img.height;
+    ctx.fillStyle = 'rgba(16, 10, 6, 0.4)';
+    ctx.beginPath();
+    ctx.ellipse(sx + TILE / 2, sy + TILE - 2, 18, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    if (vertical) {
+      // A north-south line: bag tops repeat down the run (lifted by the
+      // barricade's height); the last tile shows the nearest bag's face.
+      const mid = TD.props.sandbag_ns_mid;
+      const end = TD.props.sandbag_ns_end;
+      if (mid.loaded) ctx.drawImage(mid.img, sx + 1, sy - 10);
+      if (this.get(tx, ty + 1) !== TileType.COVER_SANDBAG) drawProp(ctx, end, sx + TILE / 2, sy + TILE);
+      return;
+    }
+    ctx.drawImage(img.img, srcX, 0, w, h, sx - 1, sy + TILE - h + 1, w, h);
+  }
+
+  private drawShadowedProp(ctx: CanvasRenderingContext2D, name: string, cx: number, bottomY: number, flip = false) {
+    const asset = TD.props[name];
+    const w = asset && asset.loaded ? asset.img.width : 28;
+    ctx.fillStyle = 'rgba(16, 10, 6, 0.42)';
+    ctx.beginPath();
+    ctx.ellipse(cx, bottomY - 3, w * 0.5, Math.max(4, w * 0.16), 0, 0, Math.PI * 2);
+    ctx.fill();
+    if (!drawProp(ctx, asset, cx, bottomY, flip)) {
+      ctx.fillStyle = '#6a5a48';
+      ctx.fillRect(cx - 12, bottomY - 24, 24, 22);
+    }
+  }
+
+  private drawCampfire(ctx: CanvasRenderingContext2D, sx: number, sy: number, time: number) {
+    const cx = sx + TILE / 2;
+    const bottom = sy + TILE - 6;
+    this.drawShadowedProp(ctx, 'drum_fire', cx, bottom);
+    // Live flames licking over the painted ones.
+    const img = TD.props.drum_fire;
+    const topY = bottom - (img.loaded ? img.img.height : 40) + 6;
+    for (let i = 0; i < 3; i++) {
+      const f = Math.sin(time * (9 + i * 3) + i * 2);
+      const fh = 7 + f * 3;
+      ctx.fillStyle = i === 2 ? 'rgba(255, 236, 170, 0.85)' : 'rgba(255, 130, 40, 0.75)';
+      ctx.beginPath();
+      const fx = cx + (i - 1) * 3;
+      ctx.moveTo(fx - 3, topY + 4);
+      ctx.quadraticCurveTo(fx + f, topY - fh, fx + 3, topY + 4);
+      ctx.closePath();
+      ctx.fill();
     }
   }
 }

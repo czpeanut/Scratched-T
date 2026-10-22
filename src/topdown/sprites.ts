@@ -1,4 +1,5 @@
-// 3/4 Top-Down Frame-by-Frame Sprite Animation System
+// Image loading and generic sprite-sheet helpers. The top-down art set
+// itself is declared in art.ts.
 
 export interface AnimationDef {
   row: number;
@@ -112,37 +113,3 @@ export class SpriteAnimator {
     this.sheet.drawFrame(ctx, def.row, this.frameIndex, dx, dy, flipX, alpha);
   }
 }
-
-// Global Art Assets Manager
-export class ArtAssets {
-  public static playerSheet: SpriteSheet = new SpriteSheet('/assets/ai/player.png', 64, 48);
-  public static gunArmImage: ImageAsset = new ImageAsset('/assets/ai/gun_arm.png');
-  public static walkerSheet: SpriteSheet = new SpriteSheet('/assets/ai/walker.png', 48, 48);
-  public static zhouSheet: SpriteSheet = new SpriteSheet('/assets/ai/zhou.png', 48, 48);
-  public static tileFill: ImageAsset = new ImageAsset('/assets/ai/tile_fill.png');
-  public static tileCap: ImageAsset = new ImageAsset('/assets/ai/tile_cap.png');
-}
-
-export const PLAYER_ANIMS: Record<string, AnimationDef> = {
-  idle: { row: 0, frames: 4, fps: 6, loop: true },
-  run: { row: 1, frames: 6, fps: 10, loop: true },
-  jump: { row: 2, frames: 2, fps: 6, loop: false },
-  fall: { row: 3, frames: 2, fps: 6, loop: false },
-  dash: { row: 4, frames: 2, fps: 12, loop: false },
-  hurt: { row: 6, frames: 2, fps: 8, loop: false },
-  punch: { row: 7, frames: 3, fps: 12, loop: false },
-  stick: { row: 8, frames: 3, fps: 9, loop: false },
-  knife: { row: 9, frames: 3, fps: 12, loop: false },
-  gunStand: { row: 10, frames: 4, fps: 6, loop: true },
-  gunRun: { row: 11, frames: 6, fps: 10, loop: true },
-};
-
-export const WALKER_ANIMS: Record<string, AnimationDef> = {
-  walk: { row: 0, frames: 4, fps: 7, loop: true },
-  charge: { row: 1, frames: 2, fps: 9, loop: true },
-  attack: { row: 2, frames: 4, fps: 10, loop: false },
-};
-
-export const ZHOU_ANIMS: Record<string, AnimationDef> = {
-  idle: { row: 0, frames: 3, fps: 4, loop: true },
-};

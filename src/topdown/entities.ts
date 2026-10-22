@@ -1,6 +1,5 @@
-// Ultra-Refined 3D Geometric Articulated Entities
-// Featuring high-detail procedural models, 360° decoupled limb movement,
-// tactical gear, cloth scarf physics, slide blowback recoil, and dynamic lighting integration.
+// Player, enemies, turret and NPC: movement, combat state machines, and
+// rendering with the directional sprite sheets from art.ts.
 
 import { clamp, lerp, dist, angleDist, rotateAngle } from './math';
 import { PLAYER_CONFIG, WEAPONS } from './constants';
@@ -8,6 +7,7 @@ import { WeaponDef } from './types';
 import { Tilemap } from './tilemap';
 import { ParticleSystem } from './particles';
 import { AudioManager } from './audio';
+import { TD, FEET_OFFSET, facingOf, walkFrame, drawCharacter, drawCharacterFlash, drawShadow, drawWeapon, drawProp } from './art';
 
 export interface EnemyBullet {
   x: number;
@@ -284,7 +284,17 @@ export class Player {
     return true;
   }
 
-  // --- ULTRA-REFINED COMMERCIAL 3/4 RENDERING PIPELINE ---
+  // Shoulder the weapon arm hangs from, in world space (chest height).
+  shoulderPoint(): { x: number; y: number } {
+    return { x: this.x, y: this.y - 6 };
+  }
+
+  // Where shots leave the pistol: along the aim from the shoulder.
+  muzzlePoint(angle: number): { x: number; y: number } {
+    const s = this.shoulderPoint();
+    return { x: s.x + Math.cos(angle) * 14, y: s.y + Math.sin(angle) * 14 };
+  }
+
   render(
     ctx: CanvasRenderingContext2D,
     camX: number,
@@ -293,399 +303,141 @@ export class Player {
     screenH: number,
     isAiming: boolean
   ) {
-    const sx = this.x - (camX - screenW / 2);
-    const sy = this.y - (camY - screenH / 2);
-
+    const ox = camX - screenW / 2;
+    const oy = camY - screenH / 2;
+    const sx = this.x - ox;
+    const sy = this.y - oy;
     const aimAngle = this.facingAngle;
     const isMoving = Math.hypot(this.vx, this.vy) > 15;
-    const isAimingUp = Math.sin(aimAngle) < -0.15; // Aiming upward/backwards
+    const facing = facingOf(aimAngle);
+    const col = walkFrame(isMoving, this.walkCycle);
 
     ctx.save();
+    drawShadow(ctx, sx, sy + FEET_OFFSET, 10);
 
-    // 1. Soft Dynamic Contact Drop Shadow at feet
-    const shadowGrad = ctx.createRadialGradient(sx, sy + 13, 2, sx, sy + 13, 16);
-    shadowGrad.addColorStop(0, 'rgba(4, 6, 12, 0.75)');
-    shadowGrad.addColorStop(0.7, 'rgba(4, 6, 12, 0.4)');
-    shadowGrad.addColorStop(1, 'rgba(4, 6, 12, 0)');
-    ctx.fillStyle = shadowGrad;
-    ctx.beginPath();
-    ctx.ellipse(sx, sy + 13, 16, 7, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // 2. Dash Ghost Trails with cyan trail glow
+    // Dash afterimages: the current frame as fading silhouettes.
     for (const g of this.ghostTrails) {
-      const gx = g.x - (camX - screenW / 2);
-      const gy = g.y - (camY - screenH / 2);
-      ctx.save();
-      ctx.globalAlpha = g.alpha * 0.45;
-      ctx.fillStyle = '#7fd4ff';
-      ctx.beginPath();
-      ctx.ellipse(gx, gy - 2, 8, 14, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.restore();
+      drawCharacterFlash(ctx, TD.player, g.x - ox, g.y - oy, facingOf(g.angle), col, g.alpha * 0.5, '#c9b28a');
     }
 
-    // 3. Invulnerability blink
     if (this.invulnTimer > 0 && Math.floor(this.invulnTimer * 16) % 2 === 0) {
-      ctx.globalAlpha = 0.45;
+      ctx.globalAlpha = 0.5;
     }
 
-    // 4. Decoupled Legs (Walking Gait along moveAngle with knees & boot soles)
-    const stride = isMoving ? Math.sin(this.walkCycle) * 5.5 : 0;
-    const mCos = isMoving ? Math.cos(this.moveAngle) : 0;
-    const mSin = isMoving ? Math.sin(this.moveAngle) : 0;
-
-    // Left Foot & Knee
-    const foot1X = sx - 4.5 + mCos * stride;
-    const foot1Y = sy + 9 + mSin * stride;
-    // Right Foot & Knee
-    const foot2X = sx + 4.5 - mCos * stride;
-    const foot2Y = sy + 9 - mSin * stride;
-
-    // Tactical Pants (Dark navy reinforced cordura)
-    ctx.fillStyle = '#1c263b';
-    ctx.fillRect(foot1X - 2.5, foot1Y - 6, 5, 6);
-    ctx.fillRect(foot2X - 2.5, foot2Y - 6, 5, 6);
-
-    // Knee Protectors (Kevlar pads with rivet highlights)
-    ctx.fillStyle = '#2d3d5e';
-    ctx.fillRect(foot1X - 2, foot1Y - 4, 4, 3);
-    ctx.fillRect(foot2X - 2, foot2Y - 4, 4, 3);
-    ctx.fillStyle = '#7a8fb8';
-    ctx.fillRect(foot1X - 1, foot1Y - 3, 1, 1);
-    ctx.fillRect(foot2X - 1, foot2Y - 3, 1, 1);
-
-    // Heavy Combat Boots (Tread sole + metal toe cap)
-    ctx.fillStyle = '#0a0e17';
-    ctx.beginPath();
-    ctx.roundRect(foot1X - 3, foot1Y - 1, 6, 8, 2);
-    ctx.roundRect(foot2X - 3, foot2Y - 1, 6, 8, 2);
-    ctx.fill();
-    ctx.fillStyle = '#3c4a63'; // Bootlaces & tread
-    ctx.fillRect(foot1X - 2, foot1Y + 1, 4, 1.5);
-    ctx.fillRect(foot2X - 2, foot2Y + 1, 4, 1.5);
-
-    // 5. Z-SORTING: If aiming UP, draw weapon & arms BEHIND the torso!
-    if (isAimingUp) {
-      this.renderArmsAndWeapon(ctx, sx, sy, aimAngle, isAiming, true);
+    // Facing away: the arm and weapon are hidden behind the body.
+    const behind = facing.row === 1;
+    if (behind) this.renderArmsAndWeapon(ctx, sx, sy, aimAngle, isAiming);
+    if (!drawCharacter(ctx, TD.player, sx, sy, facing, col)) {
+      ctx.fillStyle = '#8c7a5c';
+      ctx.fillRect(sx - 6, sy - 18, 12, 30);
     }
-
-    // 6. Torso & Heavy Ballistic Armor Vest
-    ctx.save();
-    const leanX = clamp(this.vx * 0.015, -2.5, 2.5);
-    const breathe = Math.sin(this.globalTimer * 3.5) * 0.6;
-    ctx.translate(sx + leanX, sy - 2 + breathe);
-
-    // Undercoat (Survivor trench jacket in dark slate)
-    ctx.fillStyle = '#1e293d';
-    ctx.beginPath();
-    ctx.roundRect(-7.5, -8.5, 15, 17, 4);
-    ctx.fill();
-
-    // Modular Plate Carrier (Front & Back Ballistic Armor Plate)
-    ctx.fillStyle = '#121927';
-    ctx.beginPath();
-    ctx.roundRect(-6.5, -7, 13, 13, 3);
-    ctx.fill();
-
-    // Beveled armor plate highlight
-    ctx.strokeStyle = '#2d3e5e';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(-5.5, -6, 11, 11);
-
-    // Tactical Molle Webbing & Ammo Mag Pouches
-    ctx.fillStyle = '#30415e';
-    ctx.fillRect(-5, -3, 3, 5);
-    ctx.fillRect(-1, -3, 3, 5);
-    ctx.fillRect(3, -3, 3, 5);
-    // Pouch flap snaps
-    ctx.fillStyle = '#7a8fb8';
-    ctx.fillRect(-4, -2, 1, 1);
-    ctx.fillRect(0, -2, 1, 1);
-    ctx.fillRect(4, -2, 1, 1);
-
-    // Heavy duty tactical utility belt with metal buckle
-    ctx.fillStyle = '#382b20';
-    ctx.fillRect(-6.5, 4.5, 13, 3);
-    ctx.fillStyle = '#a6825c';
-    ctx.fillRect(-1.5, 4, 3, 4);
-
-    if (isAimingUp) {
-      // Back of armor with hydration pack / comms harness
-      ctx.fillStyle = '#1a2438';
-      ctx.fillRect(-4, -5, 8, 8);
-      ctx.fillStyle = '#3f527a';
-      ctx.fillRect(-3, -4, 6, 2);
-    } else {
-      // Front survival collar zipper & radio mic
-      ctx.fillStyle = '#7fd4ff';
-      ctx.fillRect(-0.5, -7, 1, 5);
-      ctx.fillStyle = '#111';
-      ctx.fillRect(-5, -6, 2, 2.5);
+    if (this.hurtTimer > 0) {
+      drawCharacterFlash(ctx, TD.player, sx, sy, facing, col, Math.min(1, this.hurtTimer * 5), '#ffd9c4');
     }
-
-    // Dynamic Red Scarf flowing with momentum & wind
-    const scarfDx = -Math.cos(this.moveAngle) * (isMoving ? 6 : 2) + Math.sin(this.scarfFlutter) * 2;
-    const scarfDy = -Math.sin(this.moveAngle) * (isMoving ? 4 : 1) + Math.cos(this.scarfFlutter) * 1.5;
-
-    ctx.fillStyle = '#b81d38';
-    ctx.beginPath();
-    ctx.roundRect(-4, -9, 8, 3, 1.5);
-    ctx.fill();
-
-    // Scarf tail flowing behind
-    ctx.fillStyle = '#8f142a';
-    ctx.beginPath();
-    ctx.moveTo(0, -8);
-    ctx.lineTo(scarfDx - 3, -7 + scarfDy);
-    ctx.lineTo(scarfDx, -4 + scarfDy);
-    ctx.lineTo(2, -7);
-    ctx.closePath();
-    ctx.fill();
-
-    ctx.restore();
-
-    // 7. Head & Tactical Visor / Helmet in 360°
-    ctx.save();
-    const headX = sx + Math.cos(aimAngle) * 2;
-    const headY = sy - 11.5 + breathe + Math.sin(aimAngle) * 1.5;
-    ctx.translate(headX, headY);
-
-    if (isAimingUp) {
-      // Looking UP: draw high-tier Kevlar helmet back with comms antenna
-      ctx.fillStyle = '#141d2e';
-      ctx.beginPath();
-      ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Helmet rear rim & neck protection
-      ctx.fillStyle = '#26344f';
-      ctx.fillRect(-5, 1, 10, 4);
-
-      // Comms antenna
-      ctx.strokeStyle = '#6c7f9e';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(4, -2);
-      ctx.lineTo(6, -8);
-      ctx.stroke();
-    } else {
-      // Looking DOWN / SIDEWAYS: face with tactical NVG goggles
-      ctx.fillStyle = '#e8bb92';
-      ctx.beginPath();
-      ctx.arc(0, 0, 6, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Tactical helmet / dark hood
-      ctx.fillStyle = '#141d2e';
-      ctx.beginPath();
-      ctx.arc(0, -2, 6.5, Math.PI * 0.9, Math.PI * 2.1);
-      ctx.fill();
-
-      // Tactical Night-Vision Visor / Goggles (Cyan glow)
-      const gDx = clamp(Math.cos(aimAngle) * 2, -2.5, 2.5);
-      const gDy = clamp(Math.sin(aimAngle) * 1.5, -1, 2);
-
-      // Goggle frame
-      ctx.fillStyle = '#0a0d14';
-      ctx.beginPath();
-      ctx.roundRect(-4 + gDx, -2.5 + gDy, 8, 3.5, 1);
-      ctx.fill();
-
-      // Cyan tinted lenses with reflection glow
-      ctx.fillStyle = '#5ce1e6';
-      ctx.fillRect(-3 + gDx, -2 + gDy, 2.5, 2);
-      ctx.fillRect(0.5 + gDx, -2 + gDy, 2.5, 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(-2.5 + gDx, -2 + gDy, 1, 1);
-      ctx.fillRect(1 + gDx, -2 + gDy, 1, 1);
-
-      // Lower face bandana / respirator
-      ctx.fillStyle = '#b81d38';
-      ctx.beginPath();
-      ctx.roundRect(-4 + gDx * 0.5, 1.5 + gDy * 0.5, 8, 4, 1.5);
-      ctx.fill();
-    }
-    ctx.restore();
-
-    // 8. Z-SORTING: If aiming DOWN / SIDEWAYS, draw weapon & arms IN FRONT OF torso!
-    if (!isAimingUp) {
-      this.renderArmsAndWeapon(ctx, sx, sy, aimAngle, isAiming, false);
-    }
+    if (!behind) this.renderArmsAndWeapon(ctx, sx, sy, aimAngle, isAiming);
 
     ctx.restore();
   }
 
-  // Draw 360° Ultra-Refined Rotating Arms, Hands, and Equipped Weapon
+  // The weapon arm: a sleeve from the shoulder to the hand, then the held
+  // weapon sprite, all rotated toward the aim.
   private renderArmsAndWeapon(
     ctx: CanvasRenderingContext2D,
     sx: number,
     sy: number,
     aimAngle: number,
-    isAiming: boolean,
-    isBehind: boolean
+    isAiming: boolean
   ) {
     const weapon = this.currentWeapon;
-    const isFlipped = Math.cos(aimAngle) < 0;
+    const shX = sx;
+    const shY = sy - 6;
 
-    // Shoulder anchor point with slight 3/4 offset
-    const shoulderX = sx;
-    const shoulderY = sy - 3;
-
-    // Recoil pushback along opposite aim vector
-    const recoilDist = this.recoilKick;
-    const recoilX = -Math.cos(aimAngle) * recoilDist;
-    const recoilY = -Math.sin(aimAngle) * recoilDist;
-
-    ctx.save();
-    ctx.translate(shoulderX + recoilX, shoulderY + recoilY);
-    ctx.rotate(aimAngle);
-
-    if (isFlipped) {
-      ctx.scale(1, -1);
-    }
-
-    // Laser aim guide beam when Aiming Down Sights (Pinpoint Tactical Laser)
-    if (isAiming && weapon.type === 'ranged') {
-      ctx.save();
-      // Laser beam with glowing core
-      ctx.strokeStyle = 'rgba(127, 212, 255, 0.25)';
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.moveTo(22, 0);
-      ctx.lineTo(340, 0);
-      ctx.stroke();
-
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.75)';
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(22, 0);
-      ctx.lineTo(340, 0);
-      ctx.stroke();
-      ctx.restore();
-    }
-
-    if (weapon.type === 'ranged') {
-      // --- 360° ULTRA-REFINED RANGED WEAPON (9mm Tactical Pistol) ---
-      // Tactical gloved hands
-      ctx.fillStyle = '#1c263b';
-      ctx.beginPath();
-      ctx.arc(8, 2, 3, 0, Math.PI * 2);
-      ctx.arc(12, 2, 3, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Gun Frame & Ergonomic Grip
-      ctx.fillStyle = '#161c26';
-      ctx.fillRect(7, 0, 5, 6);
-      ctx.fillStyle = '#263245'; // Grip stippling
-      ctx.fillRect(8, 2, 3, 3);
-
-      // Slide (Brushed Gunmetal Titanium finish)
-      const slideRecoil = this.recoilKick > 2 ? 3 : 0;
-      ctx.fillStyle = '#4f5d75';
-      ctx.fillRect(8 - slideRecoil, -2, 14, 4);
-
-      // Slide serrations & ejection port
-      ctx.fillStyle = '#2d3748';
-      ctx.fillRect(9 - slideRecoil, -1.5, 3, 3);
-      ctx.fillStyle = '#111';
-      ctx.fillRect(14 - slideRecoil, -2, 3, 2); // Ejection chamber
-
-      // Barrel & Muzzle Crown
-      ctx.fillStyle = '#222938';
-      ctx.fillRect(17, -1.5, 6, 3);
-      // Front Iron Sight
-      ctx.fillStyle = '#7fd4ff';
-      ctx.fillRect(21, -3, 1.5, 1.5);
-
-      // Muzzle Starburst Flash on high recoil kick
-      if (this.recoilKick > 3) {
-        ctx.save();
-        ctx.translate(24, 0);
-        // Outer orange/yellow flare
-        ctx.fillStyle = '#ffe082';
-        ctx.beginPath();
-        ctx.arc(0, 0, 7, 0, Math.PI * 2);
-        ctx.fill();
-        // Inner white-hot core
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.arc(1, 0, 3.5, 0, Math.PI * 2);
-        ctx.fill();
-        // Star spikes
-        ctx.strokeStyle = '#ffe89c';
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(-2, -8);
-        ctx.lineTo(4, 8);
-        ctx.moveTo(-2, 8);
-        ctx.lineTo(4, -8);
-        ctx.stroke();
-        ctx.restore();
+    let angle = aimAngle;
+    let reach = 7;
+    if (weapon.type === 'melee') {
+      if (weapon.id === 'fists') {
+        // A jab: the fist pulls back, then shoots straight out.
+        if (this.attackPhase === 'windup') reach = 3;
+        if (this.attackPhase === 'active') reach = 14;
+        if (this.attackPhase === 'recover') reach = 10;
+      } else {
+        // A swing: wind back across the body, sweep through the target.
+        if (this.attackPhase === 'windup') angle -= 1.1;
+        if (this.attackPhase === 'active') angle += 0.9;
+        if (this.attackPhase === 'recover') angle += 0.35;
+        if (this.attackPhase === 'active') reach = 10;
       }
     } else {
-      // --- 360° ULTRA-REFINED MELEE WEAPONS ---
-      let swingAngleOffset = 0;
-      if (this.attackPhase === 'windup') swingAngleOffset = -0.75;
-      if (this.attackPhase === 'active') swingAngleOffset = 0.95;
-      if (this.attackPhase === 'recover') swingAngleOffset = 0.3;
+      reach -= this.recoilKick * 0.5;
+    }
+    const hx = shX + Math.cos(angle) * reach;
+    const hy = shY + Math.sin(angle) * reach;
 
+    if (isAiming && weapon.type === 'ranged') {
+      // Laser sight: a thin dim red line from the muzzle.
+      const mx = shX + Math.cos(aimAngle) * 14;
+      const my = shY + Math.sin(aimAngle) * 14;
       ctx.save();
-      ctx.rotate(swingAngleOffset);
-
-      // Gloved hands
-      ctx.fillStyle = '#1c263b';
+      ctx.strokeStyle = 'rgba(255, 70, 50, 0.35)';
+      ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.arc(8, 2, 3, 0, Math.PI * 2);
-      ctx.fill();
-
-      if (weapon.id === 'stick') {
-        // Heavy reinforced lead/steel pipe with tape grip & rust stains
-        ctx.fillStyle = '#4d3725'; // Rusted pipe core
-        ctx.fillRect(8, -2, 26, 4.5);
-        ctx.fillStyle = '#7a5e45';
-        ctx.fillRect(24, -3, 10, 6.5); // Weighted head
-        // Metal coupling bolt
-        ctx.fillStyle = '#9e8467';
-        ctx.fillRect(28, -3.5, 3, 7.5);
-        // Grip cloth wrap
-        ctx.fillStyle = '#e8dcc8';
-        ctx.fillRect(8, -1.5, 8, 3.5);
-      } else if (weapon.id === 'knife') {
-        // Tactical Combat Knife (Black G10 handle, tanto blade, blood groove)
-        ctx.fillStyle = '#111';
-        ctx.fillRect(7, -0.5, 5, 4);
-        // Steel Blade with cold metallic edge
-        ctx.fillStyle = '#8ea8c3';
-        ctx.beginPath();
-        ctx.moveTo(12, 1);
-        ctx.lineTo(26, -1.5);
-        ctx.lineTo(24, 4.5);
-        ctx.closePath();
-        ctx.fill();
-        // Sharpened bevel highlight
-        ctx.fillStyle = '#ffffff';
-        ctx.beginPath();
-        ctx.moveTo(14, 0);
-        ctx.lineTo(26, -1.5);
-        ctx.lineTo(22, 2);
-        ctx.closePath();
-        ctx.fill();
-      } else {
-        // Fists: Reinforced Boxing Wrap Gloves
-        ctx.fillStyle = '#1c263b';
-        ctx.beginPath();
-        ctx.arc(12, 1, 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#b81d38'; // Red knuckle wrap
-        ctx.fillRect(10, -1, 3, 4);
-      }
-
+      ctx.moveTo(mx, my);
+      ctx.lineTo(mx + Math.cos(aimAngle) * 320, my + Math.sin(aimAngle) * 320);
+      ctx.stroke();
       ctx.restore();
     }
 
+    // Sleeve
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#1f1712';
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(shX, shY);
+    ctx.lineTo(hx, hy);
+    ctx.stroke();
+    ctx.strokeStyle = '#9b8763';
+    ctx.lineWidth = 3;
+    ctx.stroke();
     ctx.restore();
+
+    if (weapon.type === 'ranged') {
+      // The pistol sprite includes the gripping hand.
+      drawWeapon(ctx, TD.weapons.pistol, hx, hy, aimAngle, 2);
+      if (this.recoilKick > 3) {
+        const mx = shX + Math.cos(aimAngle) * 14;
+        const my = shY + Math.sin(aimAngle) * 14;
+        ctx.save();
+        ctx.translate(mx, my);
+        ctx.rotate(aimAngle);
+        ctx.fillStyle = 'rgba(255, 190, 90, 0.9)';
+        ctx.beginPath();
+        ctx.moveTo(0, -3);
+        ctx.lineTo(9, 0);
+        ctx.lineTo(0, 3);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#fff2cf';
+        ctx.beginPath();
+        ctx.arc(1, 0, 2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+      }
+      return;
+    }
+
+    if (weapon.id === 'stick' || weapon.id === 'knife') {
+      drawWeapon(ctx, TD.weapons[weapon.id], hx, hy, angle, weapon.id === 'stick' ? 4 : 3);
+    }
+    // Fist (also grips the club and knife)
+    ctx.fillStyle = '#1f1712';
+    ctx.beginPath();
+    ctx.arc(hx, hy, 2.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#d9a07a';
+    ctx.beginPath();
+    ctx.arc(hx, hy, 1.7, 0, Math.PI * 2);
+    ctx.fill();
   }
 }
 
@@ -707,6 +459,8 @@ export class EnemyLooter {
   private patrolDir: number = 1;
   public hurtFlash: number = 0;
   public dead: boolean = false;
+  // 0..1: how visible this enemy is to the player (line of sight), eased.
+  public seen: number = 0;
 
   constructor(x: number, y: number) {
     this.x = x;
@@ -852,165 +606,79 @@ export class EnemyLooter {
     if (this.dead) return;
     const sx = this.x - (camX - screenW / 2);
     const sy = this.y - (camY - screenH / 2);
-
     const angle = this.facingAngle;
-    const isAimingUp = Math.sin(angle) < -0.15;
     const isMoving = Math.hypot(this.vx, this.vy) > 10;
+    const facing = facingOf(angle);
+    // The wind-up crouch reads as a held frame; the lunge as a stride.
+    let col = walkFrame(isMoving, this.walkCycle);
+    if (this.state === 'windup') col = 0;
+    if (this.state === 'attack') col = 2;
 
     ctx.save();
+    drawShadow(ctx, sx, sy + FEET_OFFSET, 10);
 
-    // 1. Soft Contact Drop Shadow
-    const shadowGrad = ctx.createRadialGradient(sx, sy + 13, 2, sx, sy + 13, 16);
-    shadowGrad.addColorStop(0, 'rgba(4, 6, 12, 0.75)');
-    shadowGrad.addColorStop(1, 'rgba(4, 6, 12, 0)');
-    ctx.fillStyle = shadowGrad;
-    ctx.beginPath();
-    ctx.ellipse(sx, sy + 13, 15, 6.5, 0, 0, Math.PI * 2);
-    ctx.fill();
+    const behind = facing.row === 1;
+    if (behind) this.renderMachete(ctx, sx, sy, angle);
+    // Wind-up tell: the body dips and shakes.
+    const shake = this.state === 'windup' ? Math.round(Math.sin(this.attackTimer * 90)) : 0;
+    if (!drawCharacter(ctx, TD.looter, sx + shake, sy, facing, col, this.state === 'windup' ? 1 : 0)) {
+      ctx.fillStyle = '#6e4a3c';
+      ctx.fillRect(sx - 6, sy - 18, 12, 30);
+    }
+    if (this.hurtFlash > 0) {
+      drawCharacterFlash(ctx, TD.looter, sx + shake, sy, facing, col, Math.min(1, this.hurtFlash * 8));
+    }
+    if (!behind) this.renderMachete(ctx, sx, sy, angle);
 
-    // 2. Alert "!" badge
-    if (this.state === 'alert') {
-      ctx.fillStyle = '#ffd24d';
+    if (this.state === 'alert' || this.state === 'windup') {
+      ctx.fillStyle = this.state === 'windup' ? '#ff5a3c' : '#ffcf6a';
+      ctx.strokeStyle = '#1f1712';
+      ctx.lineWidth = 2;
       ctx.font = 'bold 12px monospace';
       ctx.textAlign = 'center';
-      ctx.fillText('!', sx, sy - 24);
+      ctx.strokeText('!', sx, sy - 26);
+      ctx.fillText('!', sx, sy - 26);
     }
 
-    // 3. Decoupled Legs (Tattered pants + spiked boots)
-    const stride = isMoving ? Math.sin(this.walkCycle) * 5 : 0;
-    const foot1X = sx - 4 + Math.cos(angle) * stride;
-    const foot1Y = sy + 9 + Math.sin(angle) * stride;
-    const foot2X = sx + 4 - Math.cos(angle) * stride;
-    const foot2Y = sy + 9 - Math.sin(angle) * stride;
-
-    ctx.fillStyle = '#261b1d';
-    ctx.fillRect(foot1X - 2.5, foot1Y - 1, 5, 7);
-    ctx.fillRect(foot2X - 2.5, foot2Y - 1, 5, 7);
-
-    // 4. Machete Arm (drawn behind if facing up)
-    if (isAimingUp) {
-      this.renderMachete(ctx, sx, sy, angle);
-    }
-
-    // 5. Torso / Spiked Pauldron Body
-    ctx.save();
-    ctx.translate(sx, sy - 2);
-
-    // Hurt flash white
-    if (this.hurtFlash > 0) {
-      ctx.fillStyle = '#ffffff';
-    } else {
-      ctx.fillStyle = '#54151e'; // Blood burgundy scavenger jacket
-    }
-    ctx.beginPath();
-    ctx.roundRect(-7, -8, 14, 16, 4);
-    ctx.fill();
-
-    // Metal scrap chestplate with spikes
-    ctx.fillStyle = '#360c13';
-    ctx.beginPath();
-    ctx.roundRect(-6, -6, 12, 12, 3);
-    ctx.fill();
-
-    // Metal Spiked Pauldron on right shoulder
-    ctx.fillStyle = '#7a8599';
-    ctx.beginPath();
-    ctx.arc(5, -6, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#d4dbe8';
-    ctx.fillRect(6, -9, 2, 3); // Spike
-    ctx.restore();
-
-    // 6. Head & Red Gas Mask with Breathing Filter (360° rotation)
-    ctx.save();
-    ctx.translate(sx + Math.cos(angle) * 2, sy - 11.5 + Math.sin(angle) * 1.5);
-
-    if (isAimingUp) {
-      ctx.fillStyle = '#260c10';
-      ctx.beginPath();
-      ctx.arc(0, 0, 6.5, 0, Math.PI * 2);
-      ctx.fill();
-    } else {
-      ctx.fillStyle = '#cf9174';
-      ctx.beginPath();
-      ctx.arc(0, 0, 6, 0, Math.PI * 2);
-      ctx.fill();
-
-      // Gas Mask / Red Menacing Scavenger Mask
-      ctx.fillStyle = '#b81d33';
-      ctx.fillRect(-5, 0, 10, 6);
-
-      // Dual breathing filter canisters
-      ctx.fillStyle = '#111';
-      ctx.fillRect(-4, 4, 3, 3);
-      ctx.fillRect(1, 4, 3, 3);
-
-      // Glowing Sinister Red Eyes
-      const eyeDx = clamp(Math.cos(angle) * 2, -2, 2);
-      ctx.fillStyle = '#ff2b48';
-      ctx.fillRect(-3 + eyeDx, -2, 2.5, 2);
-      ctx.fillRect(0.5 + eyeDx, -2, 2.5, 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(-2 + eyeDx, -1.5, 1, 1);
-      ctx.fillRect(1.5 + eyeDx, -1.5, 1, 1);
-    }
-    ctx.restore();
-
-    // 7. Machete Arm (drawn in front if facing down/side)
-    if (!isAimingUp) {
-      this.renderMachete(ctx, sx, sy, angle);
-    }
-
-    // 8. Health bar
     if (this.health < this.maxHealth) {
-      ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-      ctx.fillRect(sx - 12, sy - 22, 24, 3);
-      ctx.fillStyle = '#ff4d6d';
-      ctx.fillRect(sx - 12, sy - 22, (this.health / this.maxHealth) * 24, 3);
+      ctx.fillStyle = 'rgba(20, 12, 8, 0.7)';
+      ctx.fillRect(sx - 10, sy - 24, 20, 3);
+      ctx.fillStyle = '#d9533b';
+      ctx.fillRect(sx - 10, sy - 24, (this.health / this.maxHealth) * 20, 3);
     }
-
     ctx.restore();
   }
 
   private renderMachete(ctx: CanvasRenderingContext2D, sx: number, sy: number, angle: number) {
+    let a = angle;
+    if (this.state === 'windup') a -= 1.2;
+    if (this.state === 'attack') a += 1.0;
+    if (this.state === 'recover') a += 0.35;
+    const shX = sx;
+    const shY = sy - 6;
+    const hx = shX + Math.cos(a) * 8;
+    const hy = shY + Math.sin(a) * 8;
     ctx.save();
-    ctx.translate(sx, sy - 3);
-    ctx.rotate(angle);
-
-    let swingOffset = 0;
-    if (this.state === 'windup') swingOffset = -0.85;
-    if (this.state === 'attack') swingOffset = 1.05;
-    if (this.state === 'recover') swingOffset = 0.3;
-
-    ctx.rotate(swingOffset);
-
-    // Hand
-    ctx.fillStyle = '#cf9174';
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = '#1f1712';
+    ctx.lineWidth = 5;
     ctx.beginPath();
-    ctx.arc(8, 2, 3, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Heavy Serrated Scavenger Machete (Sawtooth back & blood stains)
-    ctx.fillStyle = '#111';
-    ctx.fillRect(7, 0, 4, 3.5); // Handle
-    ctx.fillStyle = '#7d92ab';
-    ctx.beginPath();
-    ctx.moveTo(11, 1);
-    ctx.lineTo(27, -2);
-    ctx.lineTo(25, 5);
-    ctx.closePath();
-    ctx.fill();
-
-    // Serrated sawteeth on blade back
-    ctx.fillStyle = '#3d4a5c';
-    ctx.fillRect(15, -2, 2, 2);
-    ctx.fillRect(19, -2.5, 2, 2);
-
-    // Blood stains on tip
-    ctx.fillStyle = '#b31e33';
-    ctx.fillRect(23, -1, 3, 4);
-
+    ctx.moveTo(shX, shY);
+    ctx.lineTo(hx, hy);
+    ctx.stroke();
+    ctx.strokeStyle = '#6b5a4c';
+    ctx.lineWidth = 3;
+    ctx.stroke();
     ctx.restore();
+    drawWeapon(ctx, TD.weapons.knife, hx, hy, a, 3);
+    ctx.fillStyle = '#1f1712';
+    ctx.beginPath();
+    ctx.arc(hx, hy, 2.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#c48a68';
+    ctx.beginPath();
+    ctx.arc(hx, hy, 1.7, 0, Math.PI * 2);
+    ctx.fill();
   }
 }
 
@@ -1028,7 +696,7 @@ export class SentryTurret {
   private sweepAngleMax: number = Math.PI * 0.4;
   private sweepDir: number = 1;
   private fireCooldown: number = 0;
-  private lockTimer: number = 0;
+  public lockTimer: number = 0;
 
   constructor(x: number, y: number) {
     this.x = x;
@@ -1107,88 +775,51 @@ export class SentryTurret {
   render(ctx: CanvasRenderingContext2D, camX: number, camY: number, screenW: number, screenH: number) {
     const sx = this.x - (camX - screenW / 2);
     const sy = this.y - (camY - screenH / 2);
+    const feetY = sy + FEET_OFFSET;
 
     ctx.save();
-    // 3/4 Base elevation & shadow
-    ctx.fillStyle = 'rgba(4, 6, 12, 0.7)';
-    ctx.beginPath();
-    ctx.ellipse(sx, sy + 14, 18, 7.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Heavy Hexagonal Cast-Iron Turret Pedestal
-    ctx.fillStyle = '#1c2436';
-    ctx.beginPath();
-    ctx.roundRect(sx - 13, sy - 3, 26, 17, 4);
-    ctx.fill();
-    ctx.strokeStyle = '#3e4f73';
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
-
-    // Hydraulic Stabilizer Struts
-    ctx.fillStyle = '#55698f';
-    ctx.fillRect(sx - 15, sy + 6, 4, 8);
-    ctx.fillRect(sx + 11, sy + 6, 4, 8);
+    drawShadow(ctx, sx, feetY, 15, 0.5);
 
     if (this.dead) {
-      // Smoldering destroyed chassis
-      ctx.fillStyle = '#10141c';
-      ctx.beginPath();
-      ctx.arc(sx, sy, 10, 0, Math.PI * 2);
-      ctx.fill();
+      // Wreck: the sprite charred dark and slumped.
+      ctx.save();
+      ctx.filter = 'brightness(0.35) sepia(0.4)';
+      ctx.translate(sx, feetY);
+      ctx.scale(1, 0.7);
+      drawProp(ctx, TD.props.turret, 0, 0);
+      ctx.restore();
       ctx.restore();
       return;
     }
 
-    // Rotating 360° Head
+    // Scanning laser from the gun head
+    const headY = sy - 10;
     ctx.save();
-    ctx.translate(sx, sy - 3);
-    ctx.rotate(this.angle);
-
-    // Scanning Red Laser Guide Beam
-    ctx.save();
-    ctx.strokeStyle = 'rgba(255, 40, 60, 0.65)';
+    ctx.strokeStyle = this.lockTimer > 0 ? 'rgba(255, 60, 40, 0.75)' : 'rgba(255, 60, 40, 0.35)';
     ctx.lineWidth = 1;
-    ctx.setLineDash([5, 5]);
+    ctx.setLineDash([4, 4]);
     ctx.beginPath();
-    ctx.moveTo(18, 0);
-    ctx.lineTo(240, 0);
+    ctx.moveTo(sx + Math.cos(this.angle) * 14, headY + Math.sin(this.angle) * 14);
+    ctx.lineTo(sx + Math.cos(this.angle) * 240, headY + Math.sin(this.angle) * 240);
     ctx.stroke();
     ctx.restore();
 
-    // Twin Machine Gun Barrels with Perforated Cooling Shroud
-    ctx.fillStyle = this.hurtFlash > 0 ? '#ffffff' : '#4d5d7d';
-    ctx.fillRect(8, -5, 14, 3.5);
-    ctx.fillRect(8, 1.5, 14, 3.5);
-
-    // Muzzle crowns
-    ctx.fillStyle = '#1c2436';
-    ctx.fillRect(20, -5.5, 3, 4.5);
-    ctx.fillRect(20, 1, 3, 4.5);
-
-    // Armor Dome
-    ctx.fillStyle = this.hurtFlash > 0 ? '#ffffff' : '#2b3952';
-    ctx.beginPath();
-    ctx.arc(0, 0, 8.5, 0, Math.PI * 2);
-    ctx.fill();
-
-    // High-tech red targeting optic lens
-    ctx.fillStyle = '#ff2b44';
-    ctx.beginPath();
-    ctx.arc(4, 0, 3.5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(4.5, -1, 1, 1);
-
-    ctx.restore();
-    ctx.restore();
-
-    // Health bar
-    if (this.health < this.maxHealth && !this.dead) {
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillRect(sx - 14, sy - 24, 28, 3);
-      ctx.fillStyle = '#ff8833';
-      ctx.fillRect(sx - 14, sy - 24, (this.health / this.maxHealth) * 28, 3);
+    // The sprite faces right; mirror it to whichever side the guns point.
+    const flip = Math.cos(this.angle) < 0;
+    if (this.hurtFlash > 0) ctx.filter = 'brightness(2.2)';
+    if (!drawProp(ctx, TD.props.turret, sx, feetY, flip)) {
+      ctx.fillStyle = '#4a4038';
+      ctx.fillRect(sx - 12, sy - 14, 24, 26);
     }
+    ctx.filter = 'none';
+
+    if (this.health < this.maxHealth) {
+      ctx.fillStyle = 'rgba(20, 12, 8, 0.7)';
+      ctx.fillRect(sx - 14, sy - 34, 28, 3);
+      ctx.fillStyle = '#e08a3c';
+      ctx.fillRect(sx - 14, sy - 34, (this.health / this.maxHealth) * 28, 3);
+    }
+    ctx.restore();
   }
 }
 
@@ -1197,6 +828,7 @@ export class NPCZhou {
   public y: number;
   public radius: number = 14;
   public facingAngle: number = 0; // Smoothly tracks player
+  private animTime: number = 0;
 
   constructor(x: number, y: number) {
     this.x = x;
@@ -1216,75 +848,32 @@ export class NPCZhou {
   render(ctx: CanvasRenderingContext2D, camX: number, camY: number, screenW: number, screenH: number, playerDist: number) {
     const sx = this.x - (camX - screenW / 2);
     const sy = this.y - (camY - screenH / 2);
+    this.animTime += 1 / 60;
 
     ctx.save();
-    // Warm campfire light
-    const grad = ctx.createRadialGradient(sx, sy, 10, sx, sy, 95);
-    grad.addColorStop(0, 'rgba(255, 170, 70, 0.25)');
-    grad.addColorStop(0.7, 'rgba(255, 140, 40, 0.08)');
-    grad.addColorStop(1, 'rgba(255, 170, 70, 0)');
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    ctx.arc(sx, sy, 95, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Contact drop shadow
-    ctx.fillStyle = 'rgba(4, 6, 12, 0.7)';
-    ctx.beginPath();
-    ctx.ellipse(sx, sy + 14, 15, 6.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Seated survivor torso (Weathered bomber jacket with shearling fur collar)
-    ctx.save();
-    ctx.translate(sx, sy - 2);
-    ctx.fillStyle = '#453526';
-    ctx.beginPath();
-    ctx.roundRect(-7.5, -8.5, 15, 17, 4);
-    ctx.fill();
-
-    // Shearling fleece fur collar
-    ctx.fillStyle = '#9e8974';
-    ctx.beginPath();
-    ctx.roundRect(-8, -9, 16, 4, 2);
-    ctx.fill();
-
-    // Work cargo trousers
-    ctx.fillStyle = '#261f18';
-    ctx.fillRect(-6, 7, 12, 5);
-    ctx.restore();
-
-    // Head smoothly turns toward player
-    ctx.save();
-    ctx.translate(sx + Math.cos(this.facingAngle) * 2, sy - 11.5 + Math.sin(this.facingAngle) * 1.5);
-    ctx.fillStyle = '#e8bb92';
-    ctx.beginPath();
-    ctx.arc(0, 0, 6, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Grey survivor hair & beard with warm campfire side-lighting
-    ctx.fillStyle = '#9c9ea6';
-    ctx.beginPath();
-    ctx.arc(0, -2, 6.2, Math.PI * 0.9, Math.PI * 2.1);
-    ctx.fill();
-    ctx.fillRect(-3, 2, 6, 3.5);
-
-    // Warm amber ember highlight on face
-    ctx.fillStyle = 'rgba(255, 180, 80, 0.4)';
-    ctx.fillRect(0, -1, 3, 3);
-    ctx.restore();
-
-    // Name & prompt
-    ctx.fillStyle = '#ffe082';
-    ctx.font = 'bold 9px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('老周', sx, sy - 23);
-
-    if (playerDist < 48) {
-      ctx.fillStyle = '#ffffff';
-      ctx.font = '10px monospace';
-      ctx.fillText('[E] 交談', sx, sy - 35);
+    drawShadow(ctx, sx, sy + FEET_OFFSET, 10);
+    // idle, breath, and a wave when the player is close
+    const col = playerDist < 70 ? 2 : Math.floor(this.animTime * 1.5) % 2;
+    const flip = Math.cos(this.facingAngle) < 0;
+    if (!drawCharacter(ctx, TD.zhou, sx, sy, { row: 0, flip }, col)) {
+      ctx.fillStyle = '#6b5440';
+      ctx.fillRect(sx - 6, sy - 16, 12, 28);
     }
 
+    if (playerDist < 90) {
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(20, 12, 8, 0.85)';
+      ctx.fillStyle = '#f2cf8a';
+      ctx.strokeText('老周', sx, sy - 26);
+      ctx.fillText('老周', sx, sy - 26);
+      if (playerDist < 48) {
+        ctx.fillStyle = '#fff4e0';
+        ctx.strokeText('[E] 交談', sx, sy - 37);
+        ctx.fillText('[E] 交談', sx, sy - 37);
+      }
+    }
     ctx.restore();
   }
 }

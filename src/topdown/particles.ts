@@ -140,7 +140,7 @@ export class ParticleSystem {
       y: y + (Math.random() - 0.5) * 6,
       vx: -vx * 0.2 + (Math.random() - 0.5) * 20,
       vy: -vy * 0.2 + (Math.random() - 0.5) * 20,
-      color: '#434e6b',
+      color: '#5a4a3c',
       size: 2 + Math.random() * 3,
       life: 0.25 + Math.random() * 0.2,
       maxLife: 0.45,
@@ -203,7 +203,7 @@ export class ParticleSystem {
       angle,
       radius,
       arcSpan: Math.PI * 0.75,
-      color: isKnife ? '#cbe5ff' : '#ffd580',
+      color: isKnife ? '#f2e6d0' : '#ffd580',
       life: 0.12,
       maxLife: 0.12,
     });

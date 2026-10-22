@@ -62,13 +62,13 @@ export class Reticle {
     if (weapon.type !== 'ranged') {
       // Melee reticle: minimalist subtle targeting pip
       ctx.save();
-      ctx.strokeStyle = 'rgba(216, 229, 255, 0.45)';
+      ctx.strokeStyle = 'rgba(255, 238, 214, 0.5)';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.arc(screenX, screenY, 6, 0, Math.PI * 2);
       ctx.stroke();
 
-      ctx.fillStyle = '#7fd4ff';
+      ctx.fillStyle = '#f0d9b5';
       ctx.fillRect(screenX - 1, screenY - 1, 2, 2);
       ctx.restore();
       return;
@@ -82,11 +82,11 @@ export class Reticle {
     const spreadRadiusPx = clamp(this.currentSpread * Math.min(distToPlayer, 300) * 0.4 + 5, 4, 38);
 
     const isFullyAimed = this.aimProgress > 0.95;
-    const accentColor = isFullyAimed ? '#ffe082' : this.isAimed ? '#7fd4ff' : 'rgba(200, 220, 255, 0.7)';
+    const accentColor = isFullyAimed ? '#ffe082' : this.isAimed ? '#f0d9b5' : 'rgba(255, 236, 210, 0.7)';
     const bracketLen = isFullyAimed ? 4 : lerp(6, 4, this.aimProgress);
 
     // 1. Center pinpoint dot
-    ctx.fillStyle = isFullyAimed ? '#fff3c2' : '#7fd4ff';
+    ctx.fillStyle = isFullyAimed ? '#fff3c2' : '#f0d9b5';
     ctx.fillRect(-1, -1, 2, 2);
 
     // 2. Dynamic 4-quadrant brackets that slide inward as aim tightens
@@ -126,7 +126,7 @@ export class Reticle {
     ctx.stroke();
 
     // 3. Faint circular dispersion guide
-    ctx.strokeStyle = isFullyAimed ? 'rgba(255, 224, 130, 0.35)' : 'rgba(127, 212, 255, 0.18)';
+    ctx.strokeStyle = isFullyAimed ? 'rgba(255, 224, 130, 0.35)' : 'rgba(240, 217, 181, 0.2)';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.arc(0, 0, spreadRadiusPx, 0, Math.PI * 2);
@@ -135,7 +135,7 @@ export class Reticle {
     // 4. Aim progress gauge / diamond when aiming
     if (this.isAimed) {
       const gaugeRadius = spreadRadiusPx + 7;
-      ctx.strokeStyle = isFullyAimed ? '#ffd24d' : 'rgba(127, 212, 255, 0.65)';
+      ctx.strokeStyle = isFullyAimed ? '#ffd24d' : 'rgba(240, 217, 181, 0.65)';
       ctx.lineWidth = 1;
 
       // Circular arc showing percentage of steady aim
@@ -148,7 +148,7 @@ export class Reticle {
         ctx.fillStyle = '#ffe082';
         ctx.font = '8px monospace';
         ctx.textAlign = 'center';
-        ctx.fillText('AIM LOCK', 0, -spreadRadiusPx - 8);
+        ctx.fillText('鎖定', 0, -spreadRadiusPx - 8);
       }
     }
 

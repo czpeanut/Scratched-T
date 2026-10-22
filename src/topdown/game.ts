@@ -1,6 +1,6 @@
 // Top-Down Action Shooter Game Engine & Loop Coordinator
 
-import { VIEW, COLORS, WEAPONS } from './constants';
+import { VIEW, COLORS, WEAPONS, TILE } from './constants';
 import { GameState, DialogueScript, CutsceneStep, WeaponDef } from './types';
 import { AudioManager } from './audio';
 import { InputManager } from './input';
@@ -10,8 +10,12 @@ import { Reticle } from './reticle';
 import { StoryManager } from './story';
 import { LevelData, buildTopDownOpening } from './level';
 import { Player, EnemyBullet, PickupItem, StoryTrigger } from './entities';
+import { TD, FEET_OFFSET, TITLE_LAYERS, drawProp } from './art';
 import { dist, clamp, angleDist } from './math';
 import { wakeUpScript, getZhouScript, findAdrenalineScript } from './dialogues';
+
+// Old Zhou's oil-drum fire, the one fixed light in the level.
+const CAMPFIRE = { x: 52 * TILE + 16, y: 9 * TILE + 16 };
 
 export class GameEngine {
   public ctx: CanvasRenderingContext2D;
@@ -106,8 +110,8 @@ export class GameEngine {
       this.dustMotes.push({
         x: Math.random() * VIEW.width,
         y: Math.random() * VIEW.height,
-        vx: (Math.random() - 0.5) * 8,
-        vy: (Math.random() - 0.5) * 6 - 2,
+        vx: 3 + Math.random() * 6,
+        vy: 4 + Math.random() * 6,
         size: 1 + Math.random() * 1.5,
         alpha: 0.15 + Math.random() * 0.35,
       });
@@ -392,6 +396,8 @@ export class GameEngine {
       this.resolveMeleeHit();
     }
 
+    this.updateVisibility(dt);
+
     // 7. Update Camera
     this.camera.update(dt, player.x, player.y, player.facingAngle, this.reticle.isAimed);
 
@@ -527,8 +533,7 @@ export class GameEngine {
     player.recoilKick = 8;
 
     // Muzzle position
-    const muzzleX = player.x + Math.cos(shotAngle) * 16;
-    const muzzleY = player.y + Math.sin(shotAngle) * 16;
+    const { x: muzzleX, y: muzzleY } = player.muzzlePoint(shotAngle);
 
     // Raycast shot line out to range
     const maxRange = this.reticle.isAimed ? (weapon.range * 1.25) : weapon.range;
@@ -743,80 +748,45 @@ export class GameEngine {
     // 2. Floor decals (blood stains, bullet craters)
     this.particles.renderDecals(ctx, camX, camY, VIEW.width, VIEW.height);
 
-    // 3. 3/4 Perspective Walls with vertical facades & 3D overhangs
-    this.level.tilemap.renderWalls(ctx, camX, camY, VIEW.width, VIEW.height);
-
-    // 4. 3/4 Perspective Obstacles with contact shadows (sandbags, crates, beds, campfire, vehicle)
-    this.level.tilemap.renderObstacles(ctx, camX, camY, VIEW.width, VIEW.height, this.globalTime);
-
-    // 5. Y-Sorted 3/4 Entities (Pickups, NPC Old Zhou, Enemies, Turrets, Player)
+    // 3. Everything with height, sorted by where it touches the ground:
+    //    walls, props, pickups and characters (feet).
     type Renderable = { y: number; render: () => void };
     const renderables: Renderable[] = [];
+    this.level.tilemap.collectRenderables(ctx, camX, camY, VIEW.width, VIEW.height, this.globalTime, renderables);
 
-    // Pickups
     for (const p of this.level.pickups) {
-      if (!p.collected) {
-        renderables.push({
-          y: p.y,
-          render: () => {
-            const sx = p.x - (camX - VIEW.width / 2);
-            const sy = p.y - (camY - VIEW.height / 2);
-            const bob = Math.sin(this.globalTime * 5) * 2;
-            ctx.save();
-            ctx.translate(sx, sy + bob);
-            ctx.fillStyle = 'rgba(127, 212, 255, 0.25)';
-            ctx.beginPath();
-            ctx.arc(0, 0, 10, 0, Math.PI * 2);
-            ctx.fill();
-
-            if (p.type === 'weapon') {
-              ctx.fillStyle = '#ffe082';
-              ctx.fillRect(-7, -2, 14, 4);
-            } else {
-              ctx.fillStyle = '#6eff9e';
-              ctx.fillRect(-3, -6, 6, 12);
-              ctx.fillStyle = '#ffffff';
-              ctx.fillRect(-1, -8, 2, 3);
-            }
-
-            ctx.fillStyle = '#cfe4ff';
-            ctx.font = '8px monospace';
-            ctx.textAlign = 'center';
-            ctx.fillText(p.name, 0, -12);
-            ctx.restore();
-          },
-        });
-      }
+      if (p.collected) continue;
+      renderables.push({ y: p.y, render: () => this.renderPickup(ctx, p, camX, camY) });
     }
 
-    // NPC Old Zhou
     const zhouDist = dist(this.player.x, this.player.y, this.level.npcZhou.x, this.level.npcZhou.y);
     renderables.push({
-      y: this.level.npcZhou.y,
+      y: this.level.npcZhou.y + FEET_OFFSET,
       render: () => this.level.npcZhou.render(ctx, camX, camY, VIEW.width, VIEW.height, zhouDist),
     });
 
-    // Enemies
     for (const enemy of this.level.enemies) {
-      if (!enemy.dead) {
-        renderables.push({
-          y: enemy.y,
-          render: () => enemy.render(ctx, camX, camY, VIEW.width, VIEW.height),
-        });
-      }
+      if (enemy.dead || enemy.seen <= 0.02) continue;
+      renderables.push({
+        y: enemy.y + FEET_OFFSET,
+        render: () => {
+          ctx.save();
+          ctx.globalAlpha = enemy.seen;
+          enemy.render(ctx, camX, camY, VIEW.width, VIEW.height);
+          ctx.restore();
+        },
+      });
     }
 
-    // Turrets
     for (const turret of this.level.turrets) {
       renderables.push({
-        y: turret.y,
+        y: turret.y + FEET_OFFSET,
         render: () => turret.render(ctx, camX, camY, VIEW.width, VIEW.height),
       });
     }
 
-    // Player Character
     renderables.push({
-      y: this.player.y,
+      y: this.player.y + FEET_OFFSET,
       render: () => this.player.render(ctx, camX, camY, VIEW.width, VIEW.height, this.reticle.isAimed),
     });
 
@@ -832,11 +802,11 @@ export class GameEngine {
       const sy = b.y - (camY - VIEW.height / 2);
 
       ctx.save();
-      ctx.fillStyle = '#ff3366';
+      ctx.fillStyle = '#ff7a3c';
       ctx.beginPath();
-      ctx.arc(sx, sy, b.radius, 0, Math.PI * 2);
+      ctx.arc(sx, sy, b.radius - 1, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = '#ff99b0';
+      ctx.strokeStyle = '#ffd9a0';
       ctx.lineWidth = 1;
       ctx.stroke();
       ctx.restore();
@@ -861,7 +831,7 @@ export class GameEngine {
 
     // 12. Cutscene Fade Overlay
     if (this.activeCutscene && this.activeCutscene.fadeAlpha > 0) {
-      ctx.fillStyle = `rgba(5, 7, 14, ${this.activeCutscene.fadeAlpha})`;
+      ctx.fillStyle = `rgba(10, 6, 4, ${this.activeCutscene.fadeAlpha})`;
       ctx.fillRect(0, 0, VIEW.width, VIEW.height);
     }
 
@@ -874,15 +844,16 @@ export class GameEngine {
     // 14. In-Game HUD Message
     if (this.hudMessage && this.hudMessageTimer > 0) {
       ctx.save();
-      ctx.fillStyle = 'rgba(10, 16, 28, 0.85)';
-      ctx.strokeStyle = '#435a82';
-      ctx.lineWidth = 1;
-      const tw = ctx.measureText(this.hudMessage).width + 32;
-      ctx.strokeRect(VIEW.width / 2 - tw / 2, 42, tw, 26);
-      ctx.fillRect(VIEW.width / 2 - tw / 2, 42, tw, 26);
-
-      ctx.fillStyle = '#ffe082';
       ctx.font = 'bold 11px monospace';
+      const tw = ctx.measureText(this.hudMessage).width + 32;
+      ctx.globalAlpha = clamp(this.hudMessageTimer * 3, 0, 1);
+      ctx.fillStyle = 'rgba(23, 15, 10, 0.82)';
+      ctx.fillRect(VIEW.width / 2 - tw / 2, 42, tw, 26);
+      ctx.fillStyle = 'rgba(232, 184, 106, 0.6)';
+      ctx.fillRect(VIEW.width / 2 - tw / 2, 42, tw, 1);
+      ctx.fillRect(VIEW.width / 2 - tw / 2, 67, tw, 1);
+
+      ctx.fillStyle = '#f2dcb4';
       ctx.textAlign = 'center';
       ctx.fillText(this.hudMessage, VIEW.width / 2, 59);
       ctx.restore();
@@ -899,230 +870,214 @@ export class GameEngine {
     }
   }
 
+  private renderPickup(ctx: CanvasRenderingContext2D, p: PickupItem, camX: number, camY: number) {
+    const sx = p.x - (camX - VIEW.width / 2);
+    const sy = p.y - (camY - VIEW.height / 2);
+    const bob = Math.round(Math.sin(this.globalTime * 4 + p.x) * 1.5);
+    const prop = p.type === 'weapon' ? String(p.payload) : 'adrenaline';
+
+    // A faint warm glint on the ground so items read in the dark.
+    const pulse = 0.5 + Math.sin(this.globalTime * 3 + p.x) * 0.2;
+    const g = ctx.createRadialGradient(sx, sy, 1, sx, sy, 14);
+    g.addColorStop(0, `rgba(255, 210, 130, ${0.35 * pulse})`);
+    g.addColorStop(1, 'rgba(255, 210, 130, 0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.ellipse(sx, sy, 14, 7, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(16, 10, 6, 0.4)';
+    ctx.beginPath();
+    ctx.ellipse(sx, sy + 1, 6, 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    if (!drawProp(ctx, TD.props[prop], sx, sy - 2 + bob)) {
+      ctx.fillStyle = '#e8c98a';
+      ctx.fillRect(sx - 5, sy - 6 + bob, 10, 4);
+    }
+
+    // Name only when close enough to matter.
+    if (dist(this.player.x, this.player.y, p.x, p.y) < 70) {
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(20, 12, 8, 0.85)';
+      ctx.fillStyle = '#f2cf8a';
+      ctx.strokeText(p.name, sx, sy - 24);
+      ctx.fillText(p.name, sx, sy - 24);
+    }
+  }
+
+  // What the player can see: a cone toward the aim plus a small circle
+  // around them, both cut off by walls.
+  private viewParams() {
+    const aimed = this.reticle.isAimed;
+    return {
+      ox: this.player.x,
+      oy: this.player.y - 4,
+      aim: this.player.facingAngle,
+      far: aimed ? 330 : 260,
+      near: 84,
+      halfCone: aimed ? 0.7 : 0.95,
+    };
+  }
+
+  private viewRange(v: ReturnType<GameEngine['viewParams']>, angle: number): number {
+    const rel = Math.abs(angleDist(v.aim, angle));
+    const t = clamp((rel - v.halfCone) / 0.45, 0, 1);
+    return v.far + (v.near - v.far) * t * t * (3 - 2 * t);
+  }
+
+  private canSee(x: number, y: number, radius: number): boolean {
+    const v = this.viewParams();
+    const d = dist(v.ox, v.oy, x, y);
+    const camp = dist(x, y, CAMPFIRE.x, CAMPFIRE.y) < 110;
+    if (!camp && d > this.viewRange(v, Math.atan2(y - v.oy, x - v.ox)) + radius) return false;
+    return !this.level.tilemap.raycast(v.ox, v.oy, x, y, true).hit;
+  }
+
+  private updateVisibility(dt: number) {
+    const k = Math.min(1, dt * 8);
+    for (const e of this.level.enemies) {
+      if (e.dead) continue;
+      let target = this.canSee(e.x, e.y, e.radius) ? 1 : 0;
+      // An enemy closing in is heard, if not seen: show a faint shape.
+      if (!target && (e.state === 'chase' || e.state === 'windup') && dist(e.x, e.y, this.player.x, this.player.y) < 150) {
+        target = 0.4;
+      }
+      e.seen += (target - e.seen) * k;
+    }
+  }
+
+  private viewPolygon(): { x: number; y: number }[] {
+    const v = this.viewParams();
+    const tm = this.level.tilemap;
+    const pts: { x: number; y: number }[] = [];
+    const N = 180;
+    for (let i = 0; i < N; i++) {
+      const a = v.aim - Math.PI + (i / N) * Math.PI * 2;
+      const range = this.viewRange(v, a);
+      const ex = v.ox + Math.cos(a) * range;
+      const ey = v.oy + Math.sin(a) * range;
+      const hit = tm.raycast(v.ox, v.oy, ex, ey, true);
+      // Let the light spill a little past the hit so wall faces are lit.
+      const d = hit.hit ? Math.min(range, hit.dist + 14) : range;
+      pts.push({ x: v.ox + Math.cos(a) * d, y: v.oy + Math.sin(a) * d });
+    }
+    return pts;
+  }
+
   private renderLightingAndAtmosphere(ctx: CanvasRenderingContext2D) {
     const lCtx = this.lightCtx;
+    const v = this.viewParams();
     lCtx.clearRect(0, 0, VIEW.width, VIEW.height);
 
-    // 1. Ambient darkness base layer
-    lCtx.fillStyle = 'rgba(5, 7, 14, 0.88)';
+    // 1. Out of sight is dim, warm and still readable - not black.
+    lCtx.fillStyle = 'rgba(18, 10, 6, 0.72)';
     lCtx.fillRect(0, 0, VIEW.width, VIEW.height);
 
-    // Carve out lighting apertures using destination-out
     lCtx.save();
     lCtx.globalCompositeOperation = 'destination-out';
 
-    // 2. Tactical Flashlight Cone from Player
-    const pScreen = this.camera.worldToScreen(this.player.x, this.player.y);
-    const aimAngle = this.player.facingAngle;
-    const isAimed = this.reticle.isAimed;
-    const beamLength = isAimed ? 350 : 270;
-    const halfCone = isAimed ? 0.35 : 0.52; // ~40° focused when aiming down sights vs 60° regular
-
-    // Main cone cutout with radial falloff
-    const flashGrad = lCtx.createRadialGradient(
-      pScreen.x,
-      pScreen.y,
-      12,
-      pScreen.x,
-      pScreen.y,
-      beamLength
-    );
-    flashGrad.addColorStop(0, 'rgba(0, 0, 0, 1)');
-    flashGrad.addColorStop(0.35, 'rgba(0, 0, 0, 0.95)');
-    flashGrad.addColorStop(0.75, 'rgba(0, 0, 0, 0.7)');
-    flashGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-
-    lCtx.fillStyle = flashGrad;
+    // 2. Line-of-sight polygon, brightest near the player.
+    const o = this.camera.worldToScreen(v.ox, v.oy);
+    const poly = this.viewPolygon();
+    const g = lCtx.createRadialGradient(o.x, o.y, 8, o.x, o.y, v.far);
+    g.addColorStop(0, 'rgba(0, 0, 0, 1)');
+    g.addColorStop(0.5, 'rgba(0, 0, 0, 0.92)');
+    g.addColorStop(1, 'rgba(0, 0, 0, 0.35)');
+    lCtx.fillStyle = g;
+    lCtx.filter = 'blur(3px)';
     lCtx.beginPath();
-    lCtx.moveTo(pScreen.x, pScreen.y);
-    lCtx.arc(pScreen.x, pScreen.y, beamLength, aimAngle - halfCone, aimAngle + halfCone);
+    poly.forEach((pt, i) => {
+      const s = this.camera.worldToScreen(pt.x, pt.y);
+      if (i === 0) lCtx.moveTo(s.x, s.y);
+      else lCtx.lineTo(s.x, s.y);
+    });
     lCtx.closePath();
     lCtx.fill();
+    lCtx.filter = 'none';
 
-    // Soft penumbra edge cutout
-    const penumbraGrad = lCtx.createRadialGradient(
-      pScreen.x,
-      pScreen.y,
-      10,
-      pScreen.x,
-      pScreen.y,
-      beamLength * 1.15
-    );
-    penumbraGrad.addColorStop(0, 'rgba(0, 0, 0, 0.35)');
-    penumbraGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    lCtx.fillStyle = penumbraGrad;
-    lCtx.beginPath();
-    lCtx.moveTo(pScreen.x, pScreen.y);
-    lCtx.arc(pScreen.x, pScreen.y, beamLength * 1.15, aimAngle - halfCone * 1.3, aimAngle + halfCone * 1.3);
-    lCtx.closePath();
-    lCtx.fill();
-
-    // 3. Player Close Footing Aura (soft 44px radial so footsteps & floor are visible)
-    const auraGrad = lCtx.createRadialGradient(pScreen.x, pScreen.y, 4, pScreen.x, pScreen.y, 46);
-    auraGrad.addColorStop(0, 'rgba(0, 0, 0, 0.85)');
-    auraGrad.addColorStop(0.5, 'rgba(0, 0, 0, 0.5)');
-    auraGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    lCtx.fillStyle = auraGrad;
-    lCtx.beginPath();
-    lCtx.arc(pScreen.x, pScreen.y, 46, 0, Math.PI * 2);
-    lCtx.fill();
-
-    // 4. Old Zhou's Campfire Point Light (Warm radial cutout with natural flicker)
-    const campWorldX = 52 * 32 + 16;
-    const campWorldY = 9 * 32 + 16;
-    const campScreen = this.camera.worldToScreen(campWorldX, campWorldY);
-    const campFlicker = Math.sin(this.globalTime * 9) * 8 + Math.cos(this.globalTime * 14) * 4;
-    const campRadius = Math.max(70, 145 + campFlicker);
-
-    const campCutGrad = lCtx.createRadialGradient(
-      campScreen.x,
-      campScreen.y,
-      8,
-      campScreen.x,
-      campScreen.y,
-      campRadius
-    );
-    campCutGrad.addColorStop(0, 'rgba(0, 0, 0, 1)');
-    campCutGrad.addColorStop(0.55, 'rgba(0, 0, 0, 0.85)');
-    campCutGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-    lCtx.fillStyle = campCutGrad;
+    // 3. Old Zhou's fire lights its corner of the courtyard.
+    const campScreen = this.camera.worldToScreen(CAMPFIRE.x, CAMPFIRE.y);
+    const campFlicker = Math.sin(this.globalTime * 9) * 6 + Math.cos(this.globalTime * 14) * 3;
+    const campRadius = 130 + campFlicker;
+    const campCut = lCtx.createRadialGradient(campScreen.x, campScreen.y, 6, campScreen.x, campScreen.y, campRadius);
+    campCut.addColorStop(0, 'rgba(0, 0, 0, 1)');
+    campCut.addColorStop(0.5, 'rgba(0, 0, 0, 0.8)');
+    campCut.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    lCtx.fillStyle = campCut;
     lCtx.beginPath();
     lCtx.arc(campScreen.x, campScreen.y, campRadius, 0, Math.PI * 2);
     lCtx.fill();
 
-    // 5. Muzzle Flash Dynamic Light Burst
+    // 4. Muzzle flash lights everything around for a moment.
     if (this.muzzleFlashTimer > 0) {
-      const mScreen = this.camera.worldToScreen(this.muzzleFlashPos.x, this.muzzleFlashPos.y);
+      const m = this.camera.worldToScreen(this.muzzleFlashPos.x, this.muzzleFlashPos.y);
       const intensity = clamp(this.muzzleFlashTimer / 0.08, 0, 1);
-      const burstRadius = 190 * intensity;
-      const burstGrad = lCtx.createRadialGradient(
-        mScreen.x,
-        mScreen.y,
-        4,
-        mScreen.x,
-        mScreen.y,
-        burstRadius
-      );
-      burstGrad.addColorStop(0, 'rgba(0, 0, 0, 1)');
-      burstGrad.addColorStop(0.6, 'rgba(0, 0, 0, 0.75)');
-      burstGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-      lCtx.fillStyle = burstGrad;
+      const r = 170 * intensity;
+      const mg = lCtx.createRadialGradient(m.x, m.y, 4, m.x, m.y, r);
+      mg.addColorStop(0, 'rgba(0, 0, 0, 1)');
+      mg.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      lCtx.fillStyle = mg;
       lCtx.beginPath();
-      lCtx.arc(mScreen.x, mScreen.y, burstRadius, 0, Math.PI * 2);
+      lCtx.arc(m.x, m.y, r, 0, Math.PI * 2);
       lCtx.fill();
     }
-
     lCtx.restore();
 
-    // 6. Draw the masked dynamic darkness over the scene
     ctx.drawImage(this.lightCanvas, 0, 0);
 
-    // 7. Atmospheric Color Lighting Passes (Additive blending)
+    // 5. Warm light colour: the fire and the muzzle flash.
     ctx.save();
     ctx.globalCompositeOperation = 'lighter';
-
-    // Flashlight volumetric beam glow (subtle tactical cyan tint)
-    const beamGlow = ctx.createRadialGradient(
-      pScreen.x,
-      pScreen.y,
-      8,
-      pScreen.x,
-      pScreen.y,
-      beamLength
-    );
-    beamGlow.addColorStop(0, 'rgba(160, 215, 255, 0.08)');
-    beamGlow.addColorStop(0.5, 'rgba(120, 185, 255, 0.035)');
-    beamGlow.addColorStop(1, 'rgba(80, 150, 255, 0)');
-    ctx.fillStyle = beamGlow;
+    const warm = ctx.createRadialGradient(campScreen.x, campScreen.y, 4, campScreen.x, campScreen.y, campRadius);
+    warm.addColorStop(0, 'rgba(255, 150, 60, 0.22)');
+    warm.addColorStop(0.5, 'rgba(255, 110, 30, 0.08)');
+    warm.addColorStop(1, 'rgba(255, 80, 0, 0)');
+    ctx.fillStyle = warm;
     ctx.beginPath();
-    ctx.moveTo(pScreen.x, pScreen.y);
-    ctx.arc(pScreen.x, pScreen.y, beamLength, aimAngle - halfCone, aimAngle + halfCone);
-    ctx.closePath();
+    ctx.arc(campScreen.x, campScreen.y, campRadius, 0, Math.PI * 2);
     ctx.fill();
-
-    // Campfire warm amber illumination glow
-    const campWarmGrad = ctx.createRadialGradient(
-      campScreen.x,
-      campScreen.y,
-      4,
-      campScreen.x,
-      campScreen.y,
-      campRadius * 0.95
-    );
-    campWarmGrad.addColorStop(0, 'rgba(255, 175, 75, 0.24)');
-    campWarmGrad.addColorStop(0.45, 'rgba(255, 125, 35, 0.11)');
-    campWarmGrad.addColorStop(1, 'rgba(255, 60, 0, 0)');
-    ctx.fillStyle = campWarmGrad;
-    ctx.beginPath();
-    ctx.arc(campScreen.x, campScreen.y, campRadius * 0.95, 0, Math.PI * 2);
-    ctx.fill();
-
-    // Muzzle Flash warm white tint burst
     if (this.muzzleFlashTimer > 0) {
-      const mScreen = this.camera.worldToScreen(this.muzzleFlashPos.x, this.muzzleFlashPos.y);
+      const m = this.camera.worldToScreen(this.muzzleFlashPos.x, this.muzzleFlashPos.y);
       const intensity = clamp(this.muzzleFlashTimer / 0.08, 0, 1);
-      ctx.fillStyle = `rgba(255, 235, 190, ${0.28 * intensity})`;
+      ctx.fillStyle = `rgba(255, 200, 120, ${0.22 * intensity})`;
       ctx.beginPath();
-      ctx.arc(mScreen.x, mScreen.y, 160 * intensity, 0, Math.PI * 2);
+      ctx.arc(m.x, m.y, 120 * intensity, 0, Math.PI * 2);
       ctx.fill();
     }
-
     ctx.restore();
 
-    // 8. Floating dust motes illuminated in the light beam
-    this.renderDustMotes(ctx, pScreen.x, pScreen.y, aimAngle, halfCone, beamLength);
+    // 6. Dusk grade: pull the whole frame toward amber.
+    ctx.save();
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = '#fbe6cf';
+    ctx.fillRect(0, 0, VIEW.width, VIEW.height);
+    ctx.restore();
 
-    // 9. Edge Vignette
-    const vigGrad = ctx.createRadialGradient(
-      VIEW.width / 2,
-      VIEW.height / 2,
-      VIEW.height * 0.45,
-      VIEW.width / 2,
-      VIEW.height / 2,
-      VIEW.width * 0.72
+    this.renderDustMotes(ctx, o.x, o.y, v);
+
+    // 7. Vignette
+    const vig = ctx.createRadialGradient(
+      VIEW.width / 2, VIEW.height / 2, VIEW.height * 0.42,
+      VIEW.width / 2, VIEW.height / 2, VIEW.width * 0.7
     );
-    vigGrad.addColorStop(0, 'rgba(0, 0, 0, 0)');
-    vigGrad.addColorStop(1, 'rgba(2, 4, 8, 0.7)');
-    ctx.fillStyle = vigGrad;
+    vig.addColorStop(0, 'rgba(20, 10, 4, 0)');
+    vig.addColorStop(1, 'rgba(20, 10, 4, 0.6)');
+    ctx.fillStyle = vig;
     ctx.fillRect(0, 0, VIEW.width, VIEW.height);
   }
 
-  private renderDustMotes(
-    ctx: CanvasRenderingContext2D,
-    px: number,
-    py: number,
-    aimAngle: number,
-    halfCone: number,
-    beamLength: number
-  ) {
-    ctx.save();
+  // Drifting ash, brighter where it crosses the player's view.
+  private renderDustMotes(ctx: CanvasRenderingContext2D, px: number, py: number, v: ReturnType<GameEngine['viewParams']>) {
     for (const m of this.dustMotes) {
-      const dx = m.x - px;
-      const dy = m.y - py;
-      const d = Math.hypot(dx, dy);
-
-      // Check if mote is inside the flashlight beam cone
-      let inBeam = false;
-      if (d <= beamLength && d > 12) {
-        const moteAngle = Math.atan2(dy, dx);
-        const diff = Math.abs(angleDist(aimAngle, moteAngle));
-        if (diff <= halfCone) {
-          inBeam = true;
-        }
-      }
-
-      if (inBeam) {
-        // High visibility shimmering particle in beam
-        const shimmer = 0.5 + Math.sin(this.globalTime * 6 + m.x) * 0.3;
-        ctx.fillStyle = `rgba(200, 235, 255, ${m.alpha * 1.8 * shimmer})`;
-        ctx.fillRect(m.x, m.y, m.size, m.size);
-      } else {
-        // Faint ambient dust in darkness
-        ctx.fillStyle = `rgba(130, 160, 200, ${m.alpha * 0.35})`;
-        ctx.fillRect(m.x, m.y, m.size * 0.8, m.size * 0.8);
-      }
+      const d = Math.hypot(m.x - px, m.y - py);
+      const inView = d < this.viewRange(v, Math.atan2(m.y - py, m.x - px));
+      const shimmer = 0.6 + Math.sin(this.globalTime * 3 + m.x) * 0.3;
+      ctx.fillStyle = inView
+        ? `rgba(240, 214, 176, ${m.alpha * 1.2 * shimmer})`
+        : `rgba(170, 140, 110, ${m.alpha * 0.35})`;
+      ctx.fillRect(Math.round(m.x), Math.round(m.y), m.size > 1.8 ? 2 : 1, 1);
     }
-    ctx.restore();
   }
 
   private renderDialogueOverlay(ctx: CanvasRenderingContext2D) {
@@ -1135,44 +1090,39 @@ export class GameEngine {
     const boxW = VIEW.width - 72;
     const boxH = 92;
 
-    // Background panel
-    ctx.fillStyle = 'rgba(8, 12, 22, 0.94)';
+    // Panel: dark warm paper with a thin amber rule top and bottom.
+    ctx.fillStyle = 'rgba(22, 14, 9, 0.92)';
     ctx.fillRect(boxX, boxY, boxW, boxH);
-    ctx.strokeStyle = '#5a73a3';
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(boxX, boxY, boxW, boxH);
+    ctx.fillStyle = 'rgba(232, 184, 106, 0.55)';
+    ctx.fillRect(boxX, boxY, boxW, 1);
+    ctx.fillRect(boxX, boxY + boxH - 1, boxW, 1);
 
-    // Speaker tag
+    // Speaker name
     const speaker = node.speaker ?? '你';
-    ctx.fillStyle = '#18243b';
-    ctx.fillRect(boxX + 12, boxY - 11, 74, 18);
-    ctx.strokeStyle = '#7fd4ff';
-    ctx.strokeRect(boxX + 12, boxY - 11, 74, 18);
-
-    ctx.fillStyle = '#7fd4ff';
-    ctx.font = 'bold 10px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText(speaker, boxX + 49, boxY + 2);
+    ctx.font = 'bold 11px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#e8b86a';
+    ctx.fillText(speaker, boxX + 16, boxY + 16);
 
     // Dialogue text (typewritten)
     const currentLine = node.lines[this.activeDialogue.lineIdx] ?? '';
     const typedText = currentLine.slice(0, this.activeDialogue.charIdx);
 
-    ctx.fillStyle = '#e8f1ff';
+    ctx.fillStyle = '#f4e6cf';
     ctx.font = '12px monospace';
     ctx.textAlign = 'left';
-    ctx.fillText(typedText, boxX + 16, boxY + 30);
+    ctx.fillText(typedText, boxX + 16, boxY + 36);
 
     // Choices if available
     if (node.choices && this.activeDialogue.doneTyping && this.activeDialogue.lineIdx === node.lines.length - 1) {
-      ctx.fillStyle = '#ffe082';
+      ctx.fillStyle = '#f2cf8a';
       ctx.font = '10px monospace';
       node.choices.forEach((c, idx) => {
-        ctx.fillText(`[${idx + 1}]  ${c.text}`, boxX + 24, boxY + 52 + idx * 18);
+        ctx.fillText(`${idx + 1}.  ${c.text}`, boxX + 24, boxY + 56 + idx * 16);
       });
     } else {
       // Continue prompt
-      ctx.fillStyle = '#6b7d9e';
+      ctx.fillStyle = `rgba(201, 176, 138, ${0.55 + Math.sin(this.globalTime * 4) * 0.3})`;
       ctx.font = '9px monospace';
       ctx.textAlign = 'right';
       ctx.fillText('▼ 按空白鍵 / E 繼續', boxX + boxW - 14, boxY + boxH - 10);
@@ -1181,84 +1131,69 @@ export class GameEngine {
 
   private renderTitleScreen() {
     const ctx = this.ctx;
-    ctx.fillStyle = '#05070e';
+    ctx.fillStyle = '#1a100a';
     ctx.fillRect(0, 0, VIEW.width, VIEW.height);
 
-    // Decorative grid
-    ctx.strokeStyle = 'rgba(40, 56, 92, 0.2)';
-    ctx.lineWidth = 1;
-    for (let x = 0; x < VIEW.width; x += 32) {
-      ctx.beginPath();
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, VIEW.height);
-      ctx.stroke();
-    }
-    for (let y = 0; y < VIEW.height; y += 32) {
-      ctx.beginPath();
-      ctx.moveTo(0, y);
-      ctx.lineTo(VIEW.width, y);
-      ctx.stroke();
-    }
+    // Dusk backdrop, drifting slowly.
+    const [sky, far, mid] = TITLE_LAYERS;
+    const drift = this.globalTime * 6;
+    const layer = (img: typeof sky, speed: number, bottom: number) => {
+      if (!img.loaded) return;
+      const w = img.img.width;
+      const x = -((drift * speed) % w);
+      for (let dx = x; dx < VIEW.width; dx += w) ctx.drawImage(img.img, Math.round(dx), bottom - img.img.height);
+    };
+    layer(sky, 0.1, VIEW.height);
+    layer(far, 0.3, VIEW.height + 10);
+    layer(mid, 0.7, VIEW.height + 40);
 
-    // Title text
-    ctx.fillStyle = '#e8f1ff';
-    ctx.font = 'bold 32px monospace';
-    ctx.textAlign = 'center';
-    ctx.fillText('焦土台灣', VIEW.width / 2, 105);
+    // Darken toward the bottom where the text sits.
+    const g = ctx.createLinearGradient(0, 0, 0, VIEW.height);
+    g.addColorStop(0, 'rgba(20, 10, 5, 0.25)');
+    g.addColorStop(0.55, 'rgba(20, 10, 5, 0.55)');
+    g.addColorStop(1, 'rgba(14, 7, 4, 0.92)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, VIEW.width, VIEW.height);
 
-    ctx.fillStyle = '#7fd4ff';
-    ctx.font = '14px monospace';
-    ctx.fillText('第一章：甦醒  (俯視角末日戰術動作)', VIEW.width / 2, 135);
+    const text = (str: string, y: number, font: string, color: string) => {
+      ctx.font = font;
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(16, 8, 4, 0.85)';
+      ctx.strokeText(str, VIEW.width / 2, y);
+      ctx.fillStyle = color;
+      ctx.fillText(str, VIEW.width / 2, y);
+    };
+    text('焦土台灣', 108, 'bold 34px monospace', '#f4e6cf');
+    text('第一章　甦醒', 138, '13px monospace', '#e8b86a');
 
-    // Aim mechanic highlight badge
-    ctx.fillStyle = 'rgba(255, 224, 130, 0.15)';
-    ctx.strokeStyle = '#ffe082';
-    ctx.fillRect(VIEW.width / 2 - 190, 155, 380, 24);
-    ctx.strokeRect(VIEW.width / 2 - 190, 155, 380, 24);
-
-    ctx.fillStyle = '#ffe082';
-    ctx.font = '11px monospace';
-    ctx.fillText('★ 核心機制：右鍵瞄準縮小準星 · 遠距高精準打擊', VIEW.width / 2, 171);
-
-    // Controls table
     const controls = [
-      'WASD / 方向鍵  ·  八方向移動',
-      '左鍵 / J  ·  近戰揮擊 / 槍械射擊',
-      '右鍵 / U  ·  【瞄準縮小準星】(長按提升射程與精準度)',
-      '空白鍵  ·  戰術翻滾閃避  /  Shift 奔跑',
-      '1/2/3/4  ·  切換拳頭、棍棒、軍刀、手槍',
-      'E  ·  調查公告 / 與倖存者老周對話',
+      'WASD 移動　·　Shift 奔跑　·　空白鍵 翻滾',
+      '左鍵 攻擊 / 射擊　·　右鍵 瞄準（準星收窄）',
+      '1–4 切換武器　·　E 調查 / 交談　·　ESC 暫停',
     ];
+    controls.forEach((c, i) => text(c, 236 + i * 17, '10px monospace', '#c9b08a'));
 
-    ctx.fillStyle = '#9cb4d8';
-    ctx.font = '10px monospace';
-    controls.forEach((c, idx) => {
-      ctx.fillText(c, VIEW.width / 2, 215 + idx * 16);
-    });
-
-    // Start prompt button
-    const pulse = Math.sin(this.globalTime * 4) * 0.2 + 0.8;
-    ctx.fillStyle = `rgba(127, 212, 255, ${pulse})`;
-    ctx.font = 'bold 13px monospace';
-    ctx.fillText('▶ 點擊畫面 或 按空白鍵 開始冒險 ◀', VIEW.width / 2, 328);
+    const pulse = Math.sin(this.globalTime * 3) * 0.25 + 0.75;
+    text('點擊畫面或按空白鍵開始', 318, 'bold 12px monospace', `rgba(242, 207, 138, ${pulse})`);
   }
 
   private renderEndingScreen(ctx: CanvasRenderingContext2D) {
-    ctx.fillStyle = 'rgba(5, 7, 14, 0.92)';
+    ctx.fillStyle = 'rgba(16, 9, 5, 0.92)';
     ctx.fillRect(0, 0, VIEW.width, VIEW.height);
 
-    ctx.fillStyle = '#e8c98a';
+    ctx.fillStyle = '#e8b86a';
     ctx.font = 'bold 22px monospace';
     ctx.textAlign = 'center';
     ctx.fillText('第一章：甦醒　完結', VIEW.width / 2, 110);
 
-    ctx.fillStyle = '#cfe4ff';
+    ctx.fillStyle = '#f4e6cf';
     ctx.font = '12px monospace';
     ctx.fillText('恭喜清除檢查哨，順著舊鐵軌抵達通往南站的避難隧道。', VIEW.width / 2, 150);
     ctx.fillText('你在戰後五年的廢墟中跨出了求生的第一步。', VIEW.width / 2, 175);
     ctx.fillText('妻子與女兒的去向，以及那場戰火的真相，將在下一章揭曉。', VIEW.width / 2, 200);
 
-    ctx.fillStyle = '#7fd4ff';
+    ctx.fillStyle = '#c9b08a';
     ctx.font = 'bold 11px monospace';
     ctx.fillText('按 [R] 鍵重新遊玩第一章', VIEW.width / 2, 270);
   }

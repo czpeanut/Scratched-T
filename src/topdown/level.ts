@@ -84,10 +84,13 @@ export function buildTopDownOpening(): LevelData {
   tilemap.fillRect(40, 16, 43, 16, TileType.COVER_SANDBAG);
 
   // Old Zhou's campsite shelter (corner of courtyard)
-  tilemap.fillRect(48, 7, 56, 12, TileType.FLOOR_MOSS);
+  tilemap.fillRect(48, 7, 56, 12, TileType.FLOOR_BRICK);
   tilemap.set(52, 9, TileType.DECOR_CAMPFIRE);
   tilemap.set(50, 7, TileType.COVER_CRATE);
   tilemap.set(55, 7, TileType.COVER_CRATE);
+  // Red plastic stools around the fire
+  tilemap.decor.push({ x: 50.6 * TILE, y: 10.4 * TILE, prop: 'stools' });
+  tilemap.decor.push({ x: 53.5 * TILE, y: 11.2 * TILE, prop: 'stools', flip: true });
 
   // 4. Highway Intersection & Ambulance (Cols 58 - 86, Rows 8 - 18)
   buildRoom(58, 8, 86, 18, TileType.FLOOR_ASPHALT);
@@ -100,8 +103,12 @@ export function buildTopDownOpening(): LevelData {
   tilemap.set(86, 13, TileType.FLOOR_ASPHALT);
 
   // Vehicles & obstacles on highway
-  tilemap.set(65, 11, TileType.DECOR_VEHICLE);
-  tilemap.set(73, 14, TileType.DECOR_VEHICLE);
+  // Each wreck is two tiles wide.
+  tilemap.fillRect(65, 11, 66, 11, TileType.DECOR_VEHICLE);
+  tilemap.fillRect(73, 14, 74, 14, TileType.DECOR_VEHICLE);
+  // A scooter left on its stand
+  tilemap.set(62, 16, TileType.PROP_SOLID);
+  tilemap.decor.push({ x: 62.5 * TILE, y: 17 * TILE - 2, prop: 'scooter' });
   tilemap.set(78, 10, TileType.COVER_SANDBAG);
   tilemap.set(78, 11, TileType.COVER_SANDBAG);
 
@@ -139,7 +146,7 @@ export function buildTopDownOpening(): LevelData {
       x: 24 * TILE,
       y: 13.5 * TILE,
       radius: 12,
-      name: '廢墟棍棒 (Stick)',
+      name: '廢墟棍棒',
       collected: false,
     },
     // 2. Combat knife hidden near courtyard crates
@@ -150,7 +157,7 @@ export function buildTopDownOpening(): LevelData {
       x: 44 * TILE,
       y: 8 * TILE,
       radius: 12,
-      name: '戰術軍刀 (Combat Knife)',
+      name: '戰術軍刀',
       collected: false,
     },
     // 3. Adrenaline injector near abandoned ambulance
@@ -160,7 +167,7 @@ export function buildTopDownOpening(): LevelData {
       x: 74 * TILE,
       y: 11 * TILE,
       radius: 12,
-      name: '軍用腎上腺素 (Adrenaline)',
+      name: '軍用腎上腺素',
       collected: false,
     },
   ];
