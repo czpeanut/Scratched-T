@@ -1,0 +1,5 @@
+{
+  "frameW": 48, "frameH": 48, "scaleRef": "idle", "standHeight": 37,
+  "out": "../../assets/ai/zhou.png",
+  "anims": [ { "name": "idle", "src": "../../assets/ai/src/zhou.png", "frames": 3 } ]
+}

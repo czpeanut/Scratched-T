@@ -1,0 +1,86 @@
+{
+  "frameW": 64,
+  "frameH": 48,
+  "scaleRef": "idle",
+  "standHeight": 40,
+  "out": "../../assets/ai/player.png",
+  "anims": [
+    {
+      "name": "idle",
+      "src": "../../assets/ai/src/idle.png",
+      "frames": 4
+    },
+    {
+      "name": "run",
+      "src": "../../assets/ai/src/run.png",
+      "frames": 6
+    },
+    {
+      "name": "jump",
+      "src": "../../assets/ai/src/jump.png",
+      "frames": 2,
+      "calib": true
+    },
+    {
+      "name": "fall",
+      "src": "../../assets/ai/src/fall.png",
+      "frames": 2,
+      "calib": true
+    },
+    {
+      "name": "dash",
+      "src": "../../assets/ai/src/dash.png",
+      "frames": 2,
+      "calib": true
+    },
+    {
+      "name": "wall",
+      "src": "../../assets/ai/src/wall.png",
+      "frames": 2,
+      "calib": true
+    },
+    {
+      "name": "hurt",
+      "src": "../../assets/ai/src/hurt.png",
+      "frames": 2,
+      "calib": true
+    },
+    {
+      "name": "punch",
+      "src": "../../assets/ai/src/atk_punch.png",
+      "frames": 3,
+      "calib": true,
+      "anchor": "feet",
+      "tipFrame": 1
+    },
+    {
+      "name": "stick",
+      "src": "../../assets/ai/src/atk_stick.png",
+      "frames": 3,
+      "calib": true,
+      "anchor": "feet",
+      "tipFrame": 1
+    },
+    {
+      "name": "knife",
+      "src": "../../assets/ai/src/atk_knife.png",
+      "frames": 3,
+      "calib": true,
+      "anchor": "feet",
+      "tipFrame": 1
+    },
+    {
+      "name": "gunStand",
+      "src": "../../assets/ai/src/gun_stand.png",
+      "frames": 4,
+      "calib": true
+    },
+    {
+      "name": "gunRun",
+      "src": "../../assets/ai/src/gun_run.png",
+      "frames": 6,
+      "calib": true
+    }
+  ],
+  "tipsOut": "../../src/game/attack-tips.js"
+}

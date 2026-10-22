@@ -1,0 +1,30 @@
+{
+  "name": "hollow-runner",
+  "version": "1.0.0",
+  "description": "A 2D action shooter with fluid platforming and scrolling levels, built on HTML5 Canvas with no runtime dependencies.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 3000",
+    "build": "tsc -b && vite build",
+    "lint": "tsc --noEmit",
+    "preview": "vite preview --port 3000"
+  },
+  "keywords": ["game", "platformer", "canvas", "2d", "shooter"],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "playwright": "^1.62.1",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwindcss": "^4.3.3"
+  }
+}

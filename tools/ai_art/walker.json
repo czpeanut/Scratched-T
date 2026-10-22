@@ -1,0 +1,9 @@
+{
+  "frameW": 48, "frameH": 48, "scaleRef": "walk", "standHeight": 39,
+  "out": "../../assets/ai/walker.png",
+  "anims": [
+    { "name": "walk",   "src": "../../assets/ai/src/looter_walk.png",   "frames": 4, "calib": true },
+    { "name": "charge", "src": "../../assets/ai/src/looter_charge.png", "frames": 2, "calib": true },
+    { "name": "attack", "src": "../../assets/ai/src/looter_attack.png", "frames": 4, "calib": true, "anchor": "feet" }
+  ]
+}

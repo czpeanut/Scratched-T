@@ -1,0 +1,7 @@
+{
+  "name": "焦土台灣 (Hollow Runner) - 俯視角末日動作射擊",
+  "description": "焦土台灣：甦醒 - 2D俯視角末日生存動作遊戲，具備近戰連擊、遠距槍械射擊、瞄準縮圈準星、NPC對話與末日廢土探索。",
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

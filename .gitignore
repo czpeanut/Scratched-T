@@ -1,0 +1,10 @@
+node_modules/
+package-lock.json
+*.log
+
+# scratch files from local debugging
+.*.tmp.mjs
+# API keys (tools/gemini_gen.py reads GEMINI_API_KEY from the environment)
+.env
+*.key
+__pycache__/
