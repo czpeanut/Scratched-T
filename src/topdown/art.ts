@@ -3,7 +3,7 @@
 // still loading, so callers can fall back to a simple shape.
 
 import { ImageAsset } from './sprites';
-import { WEAPON_HAND, SWING_HAND } from './char-rig';
+import { WEAPON_HAND, SWING_HAND, AIM_HAND } from './char-rig';
 
 const td = (name: string) => new ImageAsset(`/assets/td/${name}.png`);
 
@@ -67,9 +67,10 @@ export function facingOf(angle: number): Facing {
 }
 
 // The hand a character holds a weapon in, relative to (x, y) (body centre),
-// for the given facing. Measured from the sheet by tools/td_art.py.
-export function weaponHand(who: string, facing: Facing): { x: number; y: number } {
-  const h = WEAPON_HAND[who][facing.row];
+// for the given facing and walk frame - so the weapon swings with the arm.
+// Measured from the sheet by tools/td_art.py.
+export function weaponHand(who: string, facing: Facing, col = 0): { x: number; y: number } {
+  const h = WEAPON_HAND[who][facing.row][col];
   return { x: facing.flip ? -h.x : h.x, y: h.y + FEET_OFFSET };
 }
 
@@ -94,6 +95,28 @@ export function swingHand(who: string, facing: Facing, col: number): { x: number
   return facing.flip
     ? { x: -h.x, y: h.y + FEET_OFFSET, angle: Math.PI - h.a }
     : { x: h.x, y: h.y + FEET_OFFSET, angle: h.a };
+}
+
+// Holding the pistol uses rows 8-11 (player only): the right arm held out,
+// seen from the front (3/4), the side and the back, aiming toward screen
+// right; mirrored for the left. Column 0 stands, 1-4 walk.
+// Row 11 aims straight at the camera, the gun drawn into the frame itself.
+export const AIM_ROW = { front: 8, side: 9, back: 10, down: 11 };
+
+export function aimFacing(aim: number): Facing {
+  if (facingOf(aim).row === ROW.down) return { row: AIM_ROW.down, flip: false };
+  const f = attackFacing(aim);
+  return { row: f.row - ATTACK_ROW.front + AIM_ROW.front, flip: f.flip };
+}
+
+// Whether the pose already shows the gun (no pistol sprite on top).
+export function gunInFrame(facing: Facing): boolean {
+  return facing.row === AIM_ROW.down;
+}
+
+export function aimHand(who: string, facing: Facing, col: number): { x: number; y: number } {
+  const h = AIM_HAND[who][facing.row - AIM_ROW.front][col];
+  return { x: facing.flip ? -h.x : h.x, y: h.y + FEET_OFFSET };
 }
 
 // Hands are drawn behind the body when the character faces away.
@@ -138,6 +161,55 @@ export function drawShadow(ctx: CanvasRenderingContext2D, sx: number, feetY: num
   ctx.beginPath();
   ctx.ellipse(sx, feetY, rx, rx * 0.38, 0, 0, Math.PI * 2);
   ctx.fill();
+}
+
+// Shadow of a prop: its own silhouette, nudged down-right (light from the
+// upper left) and drawn underneath it. In a 3/4 view an object touches the
+// floor along its whole lower outline - a crate along its V-shaped bottom
+// edges, a bed at each leg - and a shifted silhouette hugs all of those at
+// once, where a generic oval under it makes it look like it floats.
+const shadowCache = new Map<ImageAsset, HTMLCanvasElement>();
+function silhouette(asset: ImageAsset): HTMLCanvasElement {
+  let c = shadowCache.get(asset);
+  if (!c) {
+    const { width: w, height: h } = asset.img;
+    c = document.createElement('canvas');
+    c.width = w + 4;
+    c.height = h + 4;
+    const g = c.getContext('2d')!;
+    g.filter = 'blur(1px)';
+    g.drawImage(asset.img, 2, 2);
+    g.filter = 'none';
+    g.globalCompositeOperation = 'source-in';
+    g.fillStyle = 'rgb(18, 11, 6)';
+    g.fillRect(0, 0, c.width, c.height);
+    shadowCache.set(asset, c);
+  }
+  return c;
+}
+
+export function drawCastShadow(
+  ctx: CanvasRenderingContext2D,
+  asset: ImageAsset | undefined,
+  cx: number,
+  bottomY: number,
+  flip = false,
+  alpha = 0.45
+) {
+  if (!asset || !asset.loaded) return;
+  const sil = silhouette(asset);
+  const w = asset.img.width;
+  const h = asset.img.height;
+  const x = Math.round(cx - w / 2) + 3;
+  const y = Math.round(bottomY - h) + 2;
+  ctx.save();
+  ctx.globalAlpha *= alpha;
+  if (flip) {
+    ctx.translate(2 * x + w - 6, 0);
+    ctx.scale(-1, 1);
+  }
+  ctx.drawImage(sil, x - 2, y - 2);
+  ctx.restore();
 }
 
 // Draws an image with its bottom edge centred on (cx, bottomY).

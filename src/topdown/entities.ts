@@ -9,8 +9,8 @@ import { ParticleSystem } from './particles';
 import { AudioManager } from './audio';
 import {
   TD, FEET_OFFSET, ROW, Facing, facingOf, facesAway, weaponHand, walkFrame,
-  attackFacing, swingHand, SWING_COL,
-  drawCharacter, drawCharacterFlash, drawShadow, drawWeapon, drawProp,
+  attackFacing, swingHand, SWING_COL, aimFacing, aimHand, gunInFrame,
+  drawCharacter, drawCharacterFlash, drawShadow, drawCastShadow, drawWeapon, drawProp,
 } from './art';
 import { ImageAsset } from './sprites';
 
@@ -53,7 +53,7 @@ function drawMeleeWeapon(
     drawWeapon(ctx, asset, sx + h.x, sy + h.y, h.angle, grip);
     return;
   }
-  const h = weaponHand(who, pose.facing);
+  const h = weaponHand(who, pose.facing, pose.col);
   // Hanging from the hand, tip forward toward the side it faces.
   const angle = Math.PI / 2 + (Math.cos(aim) >= 0 ? -0.6 : 0.6);
   drawWeapon(ctx, asset, sx + h.x, sy + h.y, angle, grip);
@@ -324,10 +324,12 @@ export class Player {
     return true;
   }
 
-  // Where shots leave the pistol, which is held in the sprite's hand.
+  // Where shots leave the pistol, held out in the aiming pose's hand.
   muzzlePoint(angle: number): { x: number; y: number } {
-    const h = weaponHand('player', facingOf(this.facingAngle));
-    return { x: this.x + h.x + Math.cos(angle) * 7, y: this.y + h.y + Math.sin(angle) * 7 };
+    const f = aimFacing(this.facingAngle);
+    const h = aimHand('player', f, 0);
+    const reach = gunInFrame(f) ? 0 : 7; // the drawn-in gun's point is the muzzle
+    return { x: this.x + h.x + Math.cos(angle) * reach, y: this.y + h.y + Math.sin(angle) * reach };
   }
 
   render(
@@ -344,8 +346,13 @@ export class Player {
     const sy = this.y - oy;
     const aimAngle = this.facingAngle;
     const isMoving = Math.hypot(this.vx, this.vy) > 15;
-    const phase: AttackPhase = this.currentWeapon.type === 'melee' ? this.attackPhase : 'idle';
-    const pose = poseFor(aimAngle, isMoving, this.walkCycle, phase);
+    const gun = this.currentWeapon.type === 'ranged';
+    const phase: AttackPhase = gun ? 'idle' : this.attackPhase;
+    // With the pistol out he walks in the aiming pose, arm held toward the
+    // crosshair.
+    const pose = gun
+      ? { facing: aimFacing(aimAngle), col: walkFrame(isMoving, this.walkCycle) }
+      : poseFor(aimAngle, isMoving, this.walkCycle, phase);
     const { facing, col } = pose;
 
     ctx.save();
@@ -361,7 +368,7 @@ export class Player {
     }
 
     // Facing away (walking), the weapon is hidden behind the body.
-    const behind = phase === 'idle' && facesAway(facing);
+    const behind = !gun && phase === 'idle' && facesAway(facing);
     if (behind) this.renderWeapon(ctx, sx, sy, pose, phase, isAiming);
     if (!drawCharacter(ctx, TD.player, sx, sy, facing, col)) {
       ctx.fillStyle = '#8c7a5c';
@@ -386,14 +393,17 @@ export class Player {
     const weapon = this.currentWeapon;
     const aim = this.facingAngle;
     if (weapon.type === 'ranged') {
-      // In the sprite's hand, pointing at the crosshair; the pistol image
-      // includes the gripping hand. Recoil kicks it back along the aim.
-      const h = weaponHand('player', pose.facing);
+      // In the outstretched hand of the aiming pose, pointing at the
+      // crosshair; the pistol image includes the gripping hand. Recoil kicks
+      // it back along the aim.
+      const h = aimHand('player', pose.facing, pose.col);
       const hx = sx + h.x - Math.cos(aim) * this.recoilKick * 0.4;
       const hy = sy + h.y - Math.sin(aim) * this.recoilKick * 0.4;
-      drawWeapon(ctx, TD.weapons.pistol, hx, hy, aim, 2);
-      const mx = hx + Math.cos(aim) * 7;
-      const my = hy + Math.sin(aim) * 7;
+      const inFrame = gunInFrame(pose.facing);
+      if (!inFrame) drawWeapon(ctx, TD.weapons.pistol, hx, hy, aim, 2);
+      const reach = inFrame ? 0 : 7;
+      const mx = hx + Math.cos(aim) * reach;
+      const my = hy + Math.sin(aim) * reach;
       if (isAiming) {
         // Laser sight: a thin dim red line from the muzzle.
         ctx.save();
@@ -735,7 +745,7 @@ export class SentryTurret {
     const feetY = sy + FEET_OFFSET;
 
     ctx.save();
-    drawShadow(ctx, sx, feetY, 15, 0.5);
+    drawCastShadow(ctx, TD.props.turret, sx, feetY, Math.cos(this.angle) < 0, 0.5);
 
     if (this.dead) {
       // Wreck: the sprite charred dark and slumped.

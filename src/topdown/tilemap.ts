@@ -2,7 +2,7 @@
 
 import { TILE } from './constants';
 import { circleAABBCollision } from './math';
-import { TD, drawProp, tileHash, mirrorVariants } from './art';
+import { TD, drawProp, drawCastShadow, tileHash, mirrorVariants } from './art';
 
 // How far a wall's top face is lifted above its footprint, in pixels.
 export const WALL_H = 24;
@@ -456,11 +456,7 @@ export class Tilemap {
 
   private drawShadowedProp(ctx: CanvasRenderingContext2D, name: string, cx: number, bottomY: number, flip = false) {
     const asset = TD.props[name];
-    const w = asset && asset.loaded ? asset.img.width : 28;
-    ctx.fillStyle = 'rgba(16, 10, 6, 0.42)';
-    ctx.beginPath();
-    ctx.ellipse(cx, bottomY - 3, w * 0.5, Math.max(4, w * 0.16), 0, 0, Math.PI * 2);
-    ctx.fill();
+    drawCastShadow(ctx, asset, cx, bottomY, flip);
     if (!drawProp(ctx, asset, cx, bottomY, flip)) {
       ctx.fillStyle = '#6a5a48';
       ctx.fillRect(cx - 12, bottomY - 24, 24, 22);

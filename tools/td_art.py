@@ -9,7 +9,10 @@ Outputs:
   player.png, looter.png  rows 0-4 (down, up, right, down-right, up-right) x
                           5 cols (idle + 4 walk); rows 5-7 a melee swing
                           (wind-up, strike, follow-through) from the front,
-                          side and back; left-facing = mirrored
+                          side and back; player rows 8-11 aiming a handgun
+                          (standing + 4 walk) from the same three views and
+                          straight at the camera;
+                          left-facing = mirrored
   src/topdown/char-rig.ts the weapon hand of each row, measured
   zhou.png                row 0: idle, breath, wave; row 1: standing facing
                           down, down-right, right, up-right, up
@@ -54,7 +57,7 @@ def is_skin(p):
     return a and r > 140 and r - g >= 30 and r - b >= 50 and g > 80
 
 
-def weapon_hand(sheet, row, col):
+def weapon_hand(sheet, row, col, fallback='side'):
     """The hand a weapon goes in, for one cell: the lowest skin pixels of the
     arm on the character's right side (screen left when facing the camera,
     screen right when facing away or sideways). Returned relative to the
@@ -75,6 +78,8 @@ def weapon_hand(sheet, row, col):
         hand = [(x, y) for x, y in pts if y >= low - 1]
         hx = sum(x for x, _ in hand) / len(hand)
         hy = sum(y for _, y in hand) / len(hand)
+    elif fallback is None:
+        return None
     else:  # sleeve covers the hand: assume hip height at the body's side
         hx, hy = cx + (-5 if want_left else 5), top + 22
     return round(hx + 0.5 - CELL_W / 2, 1), round(hy - (CELL_H - 1), 1)
@@ -92,11 +97,23 @@ def build_character(prefix, out_name):
         walk = poses[1:]
         idle = poses[0] if d == 'down' else walk[1]
         pack_row(sheet, row, [idle] + walk, scale)
-    hands = [weapon_hand(sheet, r, 0) for r in range(len(ROWS))]
+    # Per frame, so a held weapon swings with the arm while walking. Where
+    # the sleeve hides the hand, keep the previous frame's position.
+    hands = []
+    for r in range(len(ROWS)):
+        idle = weapon_hand(sheet, r, 0)
+        row = [idle]
+        for c in range(1, 5):
+            h = weapon_hand(sheet, r, c, fallback=None)
+            row.append(h if h and abs(h[0] - idle[0]) < 8 and abs(h[1] - idle[1]) < 8 else row[-1])
+        hands.append(row)
     sheet, swings = add_attacks(sheet, prefix)
+    aims = None
+    if os.path.exists(os.path.join(SRC, f'{prefix}_aim_front.png')):
+        sheet, aims = add_aim(sheet, prefix)
     sheet.save(os.path.join(OUT, out_name))
     print('wrote', out_name, sheet.size)
-    return hands, swings
+    return hands, swings, aims
 
 
 ATTACK_ROWS = ('front', 'side', 'back')  # sheet rows 5, 6, 7
@@ -163,17 +180,70 @@ def add_attacks(sheet, prefix):
     return big, rig
 
 
-def write_rig(hands, attacks):
+def aim_hand(sheet, row, col, base_row):
+    """The gun hand of an aiming frame: the outermost opaque pixel in front of
+    the body, between the top of the head and the hips (the arm points out
+    at shoulder height, or up and out when seen from behind)."""
+    px = sheet.load()
+    x0, y0 = col * CELL_W, row * CELL_H
+    rows = [y for y in range(CELL_H) if any(px[x0 + x, y0 + y][3] for x in range(CELL_W))]
+    top = rows[0]
+    head = [x for y in range(top, top + 6) for x in range(CELL_W) if px[x0 + x, y0 + y][3]]
+    hx = sum(head) / len(head)
+    if row == base_row + 3:
+        # Aiming at the camera: the gun itself is drawn, pointing out of the
+        # picture in front of the chest, left of centre (his right hand) -
+        # the near-black pixels there.
+        pts = [(x, y) for y in range(top + 8, top + 19) for x in range(CELL_W)
+               if px[x0 + x, y0 + y][3] > 128 and x < hx - 1 and max(px[x0 + x, y0 + y][:3]) < 80]
+        if pts:
+            gx = sum(p[0] for p in pts) / len(pts)
+            gy = min(p[1] for p in pts) + 1  # the muzzle end faces us, at the top
+            return {'x': round(gx + 0.5 - CELL_W / 2, 1), 'y': round(gy - (CELL_H - 1), 1)}
+    pts = [(x, y) for y in range(top + 4, top + 22) for x in range(CELL_W)
+           if px[x0 + x, y0 + y][3] > 128 and x > hx + 3]
+    pts.sort(key=lambda p: -p[0])
+    far = pts[:3]
+    fx = sum(p[0] for p in far) / len(far) - 1.5
+    fy = sum(p[1] for p in far) / len(far)
+    return {'x': round(fx + 0.5 - CELL_W / 2, 1), 'y': round(fy - (CELL_H - 1), 1)}
+
+
+AIM_ROWS = ('front', 'side', 'back', 'down')  # sheet rows 8-11
+
+
+def add_aim(sheet, prefix):
+    """Rows 8-11 (player only): aiming a handgun one-handed, the right arm
+    held out, from the front (3/4), the side and the back, plus straight at
+    the camera (that one with the gun drawn in) - standing, then a 4-frame
+    walk."""
+    base = sheet.height
+    big = Image.new('RGBA', (sheet.width, base + CELL_H * len(AIM_ROWS)), (0, 0, 0, 0))
+    big.alpha_composite(sheet)
+    rig = []
+    for i, name in enumerate(AIM_ROWS):
+        strip = key_magenta(Image.open(os.path.join(SRC, f'{prefix}_aim_{name}.png')))
+        poses = find_poses(strip, 6)
+        row = base // CELL_H + i
+        pack_row(big, row, poses[1:], STAND_H / poses[0].height)
+        rig.append([aim_hand(big, row, c, base // CELL_H) for c in range(5)])
+    return big, rig
+
+
+def write_rig(hands, attacks, aims):
     path = os.path.join(ROOT, 'src/topdown/char-rig.ts')
     with open(path, 'w') as f:
         f.write('// Generated by tools/td_art.py - re-run it after changing the art.\n'
                 '//\n'
-                '// Where each character holds a weapon, per sheet row (down, up, right,\n'
-                '// down-right, up-right), in the idle frame: x from the cell centre, y from\n'
-                '// the feet (negative is up), facing as drawn (mirror x for left).\n'
-                'export const WEAPON_HAND: Record<string, { x: number; y: number }[]> = {\n')
-        for name, pts in hands.items():
-            f.write(f'  {name}: [' + ', '.join(f'{{ x: {x}, y: {y} }}' for x, y in pts) + '],\n')
+                '// Where each character holds a weapon, per walk row (down, up, right,\n'
+                '// down-right, up-right) and frame (idle + 4 walk): x from the cell centre,\n'
+                '// y from the feet (negative is up), facing as drawn (mirror x for left).\n'
+                'export const WEAPON_HAND: Record<string, { x: number; y: number }[][]> = {\n')
+        for name, rows in hands.items():
+            f.write(f'  {name}: [\n')
+            for pts in rows:
+                f.write('    [' + ', '.join(f'{{ x: {x}, y: {y} }}' for x, y in pts) + '],\n')
+            f.write('  ],\n')
         f.write('};\n\n'
                 '// The swinging fist in the attack rows (front, side, back) for wind-up,\n'
                 '// strike and follow-through, same coordinates; `a` is the forearm\n'
@@ -184,8 +254,17 @@ def write_rig(hands, attacks):
             for r in rows:
                 f.write('    [' + ', '.join(f"{{ x: {p['x']}, y: {p['y']}, a: {p['a']} }}" for p in r) + '],\n')
             f.write('  ],\n')
+        f.write('};\n\n'
+                '// The gun hand in the aiming rows (front, side, back) for standing + 4\n'
+                '// walk frames, same coordinates.\n'
+                'export const AIM_HAND: Record<string, { x: number; y: number }[][]> = {\n')
+        for name, rows in aims.items():
+            f.write(f'  {name}: [\n')
+            for r in rows:
+                f.write('    [' + ', '.join(f"{{ x: {p['x']}, y: {p['y']} }}" for p in r) + '],\n')
+            f.write('  ],\n')
         f.write('};\n')
-    print('wrote', path, hands)
+    print('wrote', path)
 
 
 def build_zhou():
@@ -404,9 +483,10 @@ def build_textures():
 
 if __name__ == '__main__':
     os.makedirs(OUT, exist_ok=True)
-    p_hands, p_swings = build_character('player', 'player.png')
-    l_hands, l_swings = build_character('looter', 'looter.png')
-    write_rig({'player': p_hands, 'looter': l_hands}, {'player': p_swings, 'looter': l_swings})
+    p_hands, p_swings, p_aims = build_character('player', 'player.png')
+    l_hands, l_swings, _ = build_character('looter', 'looter.png')
+    write_rig({'player': p_hands, 'looter': l_hands}, {'player': p_swings, 'looter': l_swings},
+              {'player': p_aims})
     build_zhou()
     build_props()
     build_sandbag_ns()
