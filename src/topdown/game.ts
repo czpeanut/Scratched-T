@@ -50,6 +50,7 @@ export class GameEngine {
     charIdx: number;
     typingTimer: number;
     doneTyping: boolean;
+    choiceIdx: number;
   } | null = null;
 
   // Cutscene State
@@ -191,6 +192,9 @@ export class GameEngine {
   }
 
   openDialogue(script: DialogueScript) {
+    // Stand still while talking (no frozen mid-stride frame).
+    this.player.vx = 0;
+    this.player.vy = 0;
     this.state = 'dialogue';
     this.notifyState();
     this.activeDialogue = {
@@ -200,6 +204,7 @@ export class GameEngine {
       charIdx: 0,
       typingTimer: 0,
       doneTyping: false,
+      choiceIdx: 0,
     };
     this.audio.dialogueBeep();
   }
@@ -457,6 +462,10 @@ export class GameEngine {
     this.level.npcZhou.update(dt, player.x, player.y);
     const zhouDist = dist(player.x, player.y, this.level.npcZhou.x, this.level.npcZhou.y);
     if (zhouDist < 48 && this.input.isPressed('interact')) {
+      // Face each other for the conversation.
+      const zhou = this.level.npcZhou;
+      player.facingAngle = Math.atan2(zhou.y - player.y, zhou.x - player.x);
+      zhou.facingAngle = player.facingAngle + Math.PI;
       const script = getZhouScript(this);
       this.openDialogue(script);
     }
@@ -675,6 +684,12 @@ export class GameEngine {
       }
     }
 
+    const d = this.activeDialogue;
+    if (node.choices?.length && d.lineIdx === node.lines.length - 1 && d.doneTyping) {
+      this.updateDialogueChoices(node.choices.length);
+      return;
+    }
+
     // Advance dialogue on Space / E / Fire / Click
     const advance = this.input.isPressed('fire') || this.input.isPressed('interact') || this.input.isPressed('dash');
     if (advance) {
@@ -693,10 +708,7 @@ export class GameEngine {
           if (node.action) node.action(this);
           if (node.flag) this.story.setFlag(node.flag);
 
-          // If choices exist, stay until choice selected (handled in React or render)
-          if (node.choices && node.choices.length > 0) {
-            // Wait for choice
-          } else if (node.next) {
+          if (node.next) {
             this.activeDialogue.nodeKey = node.next;
             this.activeDialogue.lineIdx = 0;
             this.activeDialogue.charIdx = 0;
@@ -717,10 +729,49 @@ export class GameEngine {
     }
   }
 
+  // Where the choice rows sit in the dialogue box (shared with the renderer
+  // so clicks land on what is drawn).
+  private choiceRowY(idx: number): number {
+    return VIEW.height - 110 + 56 + idx * 16;
+  }
+
+  private choiceAt(x: number, y: number, count: number): number {
+    if (x < 36 || x > VIEW.width - 36) return -1;
+    for (let i = 0; i < count; i++) {
+      const base = this.choiceRowY(i);
+      if (y >= base - 12 && y <= base + 4) return i;
+    }
+    return -1;
+  }
+
+  // Choices: 1-4 pick directly; W/S or the arrow keys move the highlight and
+  // E / Space confirm; the mouse highlights by hovering and picks by clicking,
+  // which is also what a tap does on a touch screen.
+  private updateDialogueChoices(count: number) {
+    const d = this.activeDialogue!;
+    for (let i = 0; i < Math.min(count, 4); i++) {
+      if (this.input.isPressed(`slot${i + 1}`)) return this.selectDialogueChoice(i);
+    }
+    if (this.input.isPressed('up')) d.choiceIdx = (d.choiceIdx + count - 1) % count;
+    if (this.input.isPressed('down')) d.choiceIdx = (d.choiceIdx + 1) % count;
+    const hover = this.choiceAt(this.input.mouseViewX, this.input.mouseViewY, count);
+    if (hover >= 0 && this.input.pointerActive) d.choiceIdx = hover;
+    if (this.input.isPressed('fire')) {
+      if (hover >= 0) this.selectDialogueChoice(hover);
+      return;
+    }
+    if (this.input.isPressed('interact') || this.input.isPressed('dash')) this.selectDialogueChoice(d.choiceIdx);
+  }
+
   public selectDialogueChoice(idx: number) {
     if (!this.activeDialogue) return;
     const node = this.activeDialogue.script.nodes[this.activeDialogue.nodeKey];
     if (node?.choices && node.choices[idx]) {
+      // The node is over once a choice is made: run its action now.
+      if (node.action) node.action(this);
+      if (node.flag) this.story.setFlag(node.flag);
+      this.audio.dialogueBeep();
+      this.activeDialogue.choiceIdx = 0;
       const choice = node.choices[idx];
       this.activeDialogue.nodeKey = choice.next;
       this.activeDialogue.lineIdx = 0;
@@ -762,7 +813,7 @@ export class GameEngine {
     const zhouDist = dist(this.player.x, this.player.y, this.level.npcZhou.x, this.level.npcZhou.y);
     renderables.push({
       y: this.level.npcZhou.y + FEET_OFFSET,
-      render: () => this.level.npcZhou.render(ctx, camX, camY, VIEW.width, VIEW.height, zhouDist),
+      render: () => this.level.npcZhou.render(ctx, camX, camY, VIEW.width, VIEW.height, zhouDist, this.state === 'playing'),
     });
 
     for (const enemy of this.level.enemies) {
@@ -1115,10 +1166,16 @@ export class GameEngine {
 
     // Choices if available
     if (node.choices && this.activeDialogue.doneTyping && this.activeDialogue.lineIdx === node.lines.length - 1) {
-      ctx.fillStyle = '#f2cf8a';
       ctx.font = '10px monospace';
       node.choices.forEach((c, idx) => {
-        ctx.fillText(`${idx + 1}.  ${c.text}`, boxX + 24, boxY + 56 + idx * 16);
+        const y = this.choiceRowY(idx);
+        const on = idx === this.activeDialogue!.choiceIdx;
+        if (on) {
+          ctx.fillStyle = 'rgba(232, 184, 106, 0.16)';
+          ctx.fillRect(boxX + 12, y - 11, boxW - 24, 15);
+        }
+        ctx.fillStyle = on ? '#fff2d6' : '#c9a873';
+        ctx.fillText(`${on ? '▶' : ' '} ${idx + 1}.  ${c.text}`, boxX + 18, y);
       });
     } else {
       // Continue prompt

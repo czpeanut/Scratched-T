@@ -3,11 +3,13 @@
 // still loading, so callers can fall back to a simple shape.
 
 import { ImageAsset } from './sprites';
+import { WEAPON_HAND } from './char-rig';
 
 const td = (name: string) => new ImageAsset(`/assets/td/${name}.png`);
 
-// Character sheets: 3 rows (down, up, right) x 5 cols (idle + 4 walk frames).
-// Facing left is the right row mirrored.
+// Character sheets: 5 rows (down, up, right, down-right, up-right) x 5 cols
+// (idle + 4 walk frames). The three left-facing directions mirror their
+// right-facing rows, for eight facings in all.
 export const CELL_W = 40;
 export const CELL_H = 44;
 // Feet sit this far below an entity's (x, y) body centre - the same offset the
@@ -44,13 +46,36 @@ export interface Facing {
   flip: boolean;
 }
 
-// Down/up only when the angle is clearly vertical, so diagonal movement keeps
-// the more readable side view.
+export const ROW = { down: 0, up: 1, right: 2, downRight: 3, upRight: 4 };
+
+// Eight 45° sectors, starting at facing right and turning clockwise (screen
+// y points down).
+const SECTORS: Facing[] = [
+  { row: ROW.right, flip: false },
+  { row: ROW.downRight, flip: false },
+  { row: ROW.down, flip: false },
+  { row: ROW.downRight, flip: true },
+  { row: ROW.right, flip: true },
+  { row: ROW.upRight, flip: true },
+  { row: ROW.up, flip: false },
+  { row: ROW.upRight, flip: false },
+];
+
 export function facingOf(angle: number): Facing {
-  const s = Math.sin(angle);
-  if (s < -0.6) return { row: 1, flip: false };
-  if (s > 0.6) return { row: 0, flip: false };
-  return { row: 2, flip: Math.cos(angle) < 0 };
+  const i = Math.round(angle / (Math.PI / 4));
+  return SECTORS[((i % 8) + 8) % 8];
+}
+
+// The hand a character holds a weapon in, relative to (x, y) (body centre),
+// for the given facing. Measured from the sheet by tools/td_art.py.
+export function weaponHand(who: string, facing: Facing): { x: number; y: number } {
+  const h = WEAPON_HAND[who][facing.row];
+  return { x: facing.flip ? -h.x : h.x, y: h.y + FEET_OFFSET };
+}
+
+// Hands are drawn behind the body when the character faces away.
+export function facesAway(facing: Facing): boolean {
+  return facing.row === ROW.up || facing.row === ROW.upRight;
 }
 
 export function walkFrame(moving: boolean, walkCycle: number): number {
