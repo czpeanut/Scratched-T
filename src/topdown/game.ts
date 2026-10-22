@@ -262,10 +262,15 @@ export class GameEngine {
     dt = Math.min(dt, 0.08);
 
     this.globalTime += dt;
-    this.update(dt);
-    this.render();
-
+    // Schedule the next frame first: an exception thrown by a story script
+    // must not stop the loop and freeze the game.
     this.animId = requestAnimationFrame(this.loop.bind(this));
+    try {
+      this.update(dt);
+      this.render();
+    } catch (err) {
+      console.error(err);
+    }
   }
 
   update(dt: number) {
@@ -451,7 +456,7 @@ export class GameEngine {
           player.unlockWeapon(pickup.payload);
           player.equipWeapon(pickup.payload);
           this.showMessage(`獲得武器：${pickup.name}`, 3.0);
-        } else if (pickup.type === 'adrenaline') {
+        } else if (pickup.type === 'adrenaline' && !this.story.hasFlag('found_adrenaline')) {
           this.story.grantAbility('sprint');
           this.openDialogue(findAdrenalineScript);
         }
@@ -460,6 +465,19 @@ export class GameEngine {
 
     // 12. NPC Zhou interaction & tracking
     this.level.npcZhou.update(dt, player.x, player.y);
+    // Old Zhou is solid: keep the player from walking through him.
+    {
+      const z = this.level.npcZhou;
+      const minD = player.radius + 9;
+      const d = dist(player.x, player.y, z.x, z.y);
+      if (d < minD) {
+        const a = d > 0.01 ? Math.atan2(player.y - z.y, player.x - z.x) : Math.PI / 2;
+        const out = this.level.tilemap.resolveCircleCollision(
+          z.x + Math.cos(a) * minD, z.y + Math.sin(a) * minD, player.radius);
+        player.x = out.x;
+        player.y = out.y;
+      }
+    }
     const zhouDist = dist(player.x, player.y, this.level.npcZhou.x, this.level.npcZhou.y);
     if (zhouDist < 48 && this.input.isPressed('interact')) {
       // Face each other for the conversation.

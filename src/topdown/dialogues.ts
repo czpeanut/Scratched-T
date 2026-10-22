@@ -66,7 +66,11 @@ export const findAdrenalineScript: DialogueScript = {
       action: (game) => {
         game.story.grantAbility('sprint');
         game.audio.pickup();
-        game.hud.showMessage('已解鎖：戰術奔跑 / 翻滾閃避', 3.0);
+        game.showMessage('已解鎖：戰術奔跑 / 翻滾閃避', 3.0);
+        // The trigger zone and the pickup tell the same moment; once read,
+        // the injector is used up.
+        const pen = game.level.pickups.find((p) => p.id === 'pickup_adrenaline');
+        if (pen) pen.collected = true;
       },
     },
   },
@@ -170,7 +174,7 @@ export function getZhouScript(game: any): DialogueScript {
           game2.player.unlockWeapon('pistol');
           game2.player.equipWeapon('pistol');
           game2.audio.pickup();
-          game2.hud.showMessage('獲得武器：軍用手槍 (按 4 或滑鼠切換)', 3.5);
+          game2.showMessage('獲得武器：軍用手槍（按 4 切換）', 3.5);
         },
         next: 'farewell',
       },
